@@ -20,9 +20,14 @@ export class WebSocketHandler {
     this.setupAudioPlayer();
   }
 
+  private log(source: 'go' | 'nodejs', message: string): void {
+    console.log(`[${source === 'go' ? 'Go' : 'Node'}] ${message}`);
+    this.broadcastJson({ type: 'log', source, message });
+  }
+
   private setupWebSocket(): void {
     this.wss.on('connection', (ws) => {
-      console.log('[WebSocket] Browser connected');
+      this.log('nodejs', 'Browser connected');
       this.clients.add(ws);
 
       // Send current debug mode state
@@ -30,11 +35,11 @@ export class WebSocketHandler {
 
       ws.on('message', (data) => this.handleBrowserMessage(ws, data));
       ws.on('close', () => {
-        console.log('[WebSocket] Browser disconnected');
+        this.log('nodejs', 'Browser disconnected');
         this.clients.delete(ws);
       });
       ws.on('error', (err) => {
-        console.error('[WebSocket] Error:', err.message);
+        this.log('nodejs', `WebSocket error: ${err.message}`);
       });
     });
   }
@@ -45,6 +50,7 @@ export class WebSocketHandler {
     });
 
     this.audioPlayer.on('error', (err: Error) => {
+      this.log('nodejs', `Audio player error: ${err.message}`);
       this.broadcastJson({ type: 'error', message: 'Audio player error: ' + err.message });
     });
   }
@@ -52,9 +58,10 @@ export class WebSocketHandler {
   async connect(): Promise<void> {
     try {
       await this.socketClient.connect();
+      this.log('nodejs', 'Connected to Go server');
 
       this.socketClient.on('event', (event: Event) => {
-        console.log('[WebSocket] Event from Go:', event.type);
+        this.log('go', `Event: ${event.type}`);
         this.handleGoEvent(event);
       });
 
@@ -79,13 +86,13 @@ export class WebSocketHandler {
       });
 
       this.socketClient.on('close', () => {
-        console.log('[WebSocket] Go connection closed');
+        this.log('go', 'Connection closed');
         this.audioPlayer.stop();
         this.broadcastJson({ type: 'error', session_id: '', message: 'Server disconnected' });
       });
 
     } catch (err) {
-      console.error('[WebSocket] Failed to connect to Go server:', err);
+      this.log('nodejs', `Failed to connect to Go server: ${err}`);
       throw err;
     }
   }
@@ -93,16 +100,16 @@ export class WebSocketHandler {
   private handleGoEvent(event: Event): void {
     switch (event.type) {
       case 'ready':
-        console.log('[WebSocket] Stream ready');
+        this.log('go', 'Stream ready');
         if (this.debugMode) {
-          console.log('[WebSocket] Debug mode ON - playing to macOS speakers');
+          this.log('nodejs', 'Debug mode ON - playing to macOS speakers');
           this.audioPlayer.start();
         }
         this.broadcastJson(event);
         break;
 
       case 'finished':
-        console.log('[WebSocket] Stream finished, total:', this.bytesReceived, 'bytes');
+        this.log('go', `Stream finished, total: ${this.bytesReceived} bytes`);
         if (this.debugMode) {
           this.audioPlayer.end();
         }
@@ -110,7 +117,7 @@ export class WebSocketHandler {
         break;
 
       case 'error':
-        console.log('[WebSocket] Error from Go:', event.message);
+        this.log('go', `Error: ${event.message}`);
         this.audioPlayer.stop();
         this.broadcastJson(event);
         break;
@@ -123,7 +130,7 @@ export class WebSocketHandler {
   private handleBrowserMessage(ws: WebSocket, data: RawData): void {
     try {
       const message = JSON.parse(data.toString());
-      console.log('[WebSocket] Browser:', message.action || message.type);
+      this.log('nodejs', `Browser action: ${message.action || message.type}`);
 
       if (message.action === 'play' && message.url) {
         this.bytesReceived = 0;
@@ -131,6 +138,9 @@ export class WebSocketHandler {
 
         const sessionId = generateSessionId();
         this.currentSessionId = sessionId;
+
+        this.log('nodejs', `Starting playback: ${message.url}`);
+        this.log('go', `Play command sent (session: ${sessionId.slice(0, 8)}...)`);
 
         // Use PCM format for debug playback
         const command: Command = {
@@ -145,6 +155,7 @@ export class WebSocketHandler {
 
       } else if (message.action === 'stop') {
         if (this.currentSessionId) {
+          this.log('go', 'Stop command sent');
           const command: Command = {
             type: 'stop',
             session_id: this.currentSessionId,
@@ -156,11 +167,11 @@ export class WebSocketHandler {
 
       } else if (message.action === 'set_debug') {
         this.debugMode = !!message.enabled;
-        console.log('[WebSocket] Debug mode:', this.debugMode ? 'ON' : 'OFF');
+        this.log('nodejs', `Debug mode: ${this.debugMode ? 'ON' : 'OFF'}`);
         this.broadcastJson({ type: 'debug_mode', enabled: this.debugMode });
       }
     } catch (err) {
-      console.error('[WebSocket] Error handling message:', err);
+      this.log('nodejs', `Error handling message: ${err}`);
     }
   }
 

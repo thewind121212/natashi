@@ -8,6 +8,7 @@ export declare class WebSocketHandler {
     private bytesReceived;
     private debugMode;
     constructor(server: HttpServer);
+    private log;
     private setupWebSocket;
     private setupAudioPlayer;
     connect(): Promise<void>;

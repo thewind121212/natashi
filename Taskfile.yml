@@ -10,7 +10,7 @@ tasks:
       - task --list
 
   run:
-    desc: Start both servers (Go in background, Node.js in foreground)
+    desc: Start all servers (Go + Node.js backend + Vite client)
     cmds:
       - task: kill
       - |
@@ -23,15 +23,23 @@ tasks:
         sleep 2
 
         echo ""
-        echo "Starting Node.js server..."
-        echo "Open http://localhost:3000 in your browser"
-        echo "Press Ctrl+C to stop both servers"
+        echo "Starting Node.js backend in background..."
+        cd playground && npm run dev &
+        NODE_PID=$!
+        echo "Node.js server PID: $NODE_PID"
+        sleep 2
+
+        echo ""
+        echo "Starting Vite client..."
+        echo "Open http://localhost:5173 in your browser"
+        echo "Press Ctrl+C to stop all servers"
         echo ""
 
-        cd playground && npm run dev
+        cd playground/client && npm run dev
 
-        # When Node exits, kill Go
+        # When Vite exits, kill Go and Node
         kill $GO_PID 2>/dev/null || true
+        kill $NODE_PID 2>/dev/null || true
 
   go:
     desc: Start only Go server
@@ -45,6 +53,12 @@ tasks:
     cmds:
       - npm run dev
 
+  client:
+    desc: Start only Vite client (React frontend)
+    dir: playground/client
+    cmds:
+      - npm run dev
+
   kill:
     desc: Kill any running playground servers
     cmds:
@@ -53,6 +67,8 @@ tasks:
         pkill -f "cmd/playground/main" 2>/dev/null || true
         pkill -f "playground/dist/index.js" 2>/dev/null || true
         pkill -f "node dist/index.js" 2>/dev/null || true
+        pkill -f "vite" 2>/dev/null || true
+        pkill -f "playground/client" 2>/dev/null || true
         rm -f {{.SOCKET_PATH}}
         echo "Killed existing servers"
 
@@ -61,12 +77,14 @@ tasks:
     cmds:
       - go build -o bin/playground cmd/playground/main.go
       - cd playground && npm run build
+      - cd playground/client && npm run build
       - echo "Build complete"
 
   install:
     desc: Install dependencies
     cmds:
       - cd playground && npm install
+      - cd playground/client && npm install
       - echo "Dependencies installed"
 
   clean:
@@ -74,5 +92,6 @@ tasks:
     cmds:
       - rm -rf bin/
       - rm -rf playground/dist/
+      - rm -rf playground/client/dist/
       - rm -f {{.SOCKET_PATH}}
       - echo "Cleaned"
