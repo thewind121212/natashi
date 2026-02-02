@@ -25,8 +25,7 @@ flowchart TB
         VOICE[Voice Channel]
     end
 
-    subgraph Container["Docker Container"]
-        subgraph NodeJS["Node.js (Brain)"]
+    subgraph C3_1["C3-1: Node.js Application"]
             CMD[Slash Commands]
             QM[Queue Manager]
             VM[Voice Manager]
@@ -38,13 +37,12 @@ flowchart TB
             SOCK2[/tmp/music-audio.sock]
         end
 
-        subgraph Go["Go (Audio Processor)"]
+        subgraph C3_2["C3-2: Go Audio Application"]
             WP[Worker Pool]
             YT[yt-dlp]
             FF[FFmpeg]
             OP[Opus Encoder]
         end
-    end
 
     USER -->|commands| CMD
     CMD --> QM
@@ -89,32 +87,38 @@ flowchart TB
 **Read and understand current architecture:**
 
 1. **C3 documentation to read:**
-   - `.c3/README.md` - System context (c3-0)
-   - `.c3/c3-1-container/README.md` - Container overview
-   - `.c3/c3-1-container/c3-1XX-*/README.md` - Relevant components
+   - `.c3/README.md` - System overview
+   - `.c3/c3-0-context/README.md` - System context
+   - `.c3/c3-1-nodejs/README.md` - Node.js container
+   - `.c3/c3-2-go-audio/README.md` - Go container
+   - `.c3/c3-1-nodejs/c3-1XX-*/README.md` - Node.js components
+   - `.c3/c3-2-go-audio/c3-2XX-*/README.md` - Go components
 
 2. **C3 Components:**
 
 ```mermaid
 flowchart TB
-    subgraph C3["C3 Components"]
+    subgraph C3_1["C3-1: Node.js Components"]
         C101[c3-101<br/>Discord Bot]
         C102[c3-102<br/>Voice Manager]
         C103[c3-103<br/>Queue Manager]
         C104[c3-104<br/>Socket Client]
-        C105[c3-105<br/>Audio Processor]
-        C106[c3-106<br/>Stream Extractor]
-        C107[c3-107<br/>Opus Encoder]
-        C108[c3-108<br/>Jitter Buffer]
+    end
+
+    subgraph C3_2["C3-2: Go Components"]
+        C201[c3-201<br/>Audio Processor]
+        C202[c3-202<br/>Stream Extractor]
+        C203[c3-203<br/>Opus Encoder]
+        C204[c3-204<br/>Jitter Buffer]
     end
 
     C101 --> C102
     C101 --> C103
     C102 --> C104
-    C104 --> C105
-    C105 --> C106
-    C106 --> C107
-    C107 --> C108
+    C104 <-.-> C201
+    C201 --> C202
+    C202 --> C203
+    C203 --> C204
 ```
 
 3. **Questions to answer:**

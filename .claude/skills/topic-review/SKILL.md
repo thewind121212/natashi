@@ -24,8 +24,7 @@ flowchart TB
         VOICE[Voice Channel]
     end
 
-    subgraph Container["Docker Container"]
-        subgraph NodeJS["Node.js (Brain)"]
+    subgraph C3_1["C3-1: Node.js Application"]
             CMD[Slash Commands]
             QM[Queue Manager]
             VM[Voice Manager]
@@ -37,13 +36,12 @@ flowchart TB
             SOCK2[/tmp/music-audio.sock]
         end
 
-        subgraph Go["Go (Audio Processor)"]
+        subgraph C3_2["C3-2: Go Audio Application"]
             WP[Worker Pool]
             YT[yt-dlp]
             FF[FFmpeg]
             OP[Opus Encoder]
         end
-    end
 
     USER -->|commands| CMD
     CMD --> QM
@@ -290,7 +288,7 @@ flowchart TB
         C102{c3-102<br/>Voice Manager<br/>@discordjs/voice?}
         C103{c3-103<br/>Queue Manager<br/>State in Node?}
         C104{c3-104<br/>Socket Client<br/>Unix socket?}
-        C105{c3-105<br/>Audio Processor<br/>Worker pool?}
+        C201{c3-201<br/>Audio Processor<br/>Worker pool?}
     end
 ```
 

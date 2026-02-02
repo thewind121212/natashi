@@ -21,26 +21,26 @@ ONE TASK = ONE ATOMIC CHANGE = ONE VERIFICATION = DONE ✅
 
 ```mermaid
 flowchart TB
-    subgraph Container["Music Bot Architecture"]
-        subgraph NodeJS["Node.js (Brain)"]
+    subgraph System["Music Bot Architecture"]
+        subgraph C3_1["C3-1: Node.js Application"]
             C101[c3-101 Discord Bot]
             C102[c3-102 Voice Manager]
             C103[c3-103 Queue Manager]
             C104[c3-104 Socket Client]
         end
 
-        subgraph Go["Go (Audio Processor)"]
-            C105[c3-105 Audio Processor]
-            C106[c3-106 Stream Extractor]
-            C107[c3-107 Opus Encoder]
-            C108[c3-108 Jitter Buffer]
+        subgraph C3_2["C3-2: Go Audio Application"]
+            C201[c3-201 Audio Processor]
+            C202[c3-202 Stream Extractor]
+            C203[c3-203 Opus Encoder]
+            C204[c3-204 Jitter Buffer]
         end
     end
 
     C101 --> C102 --> C104
     C101 --> C103
-    C104 <--> C105
-    C105 --> C106 --> C107 --> C108
+    C104 <--> C201
+    C201 --> C202 --> C203 --> C204
 ```
 
 **C3 Documentation:** `.c3/` folder contains full architecture details.
@@ -84,8 +84,8 @@ When tasks span both layers, check if parallel execution is possible:
 
 | Stream | Layer | C3 Components | Directory |
 |--------|-------|---------------|-----------|
-| **Node.js Stream** | Node.js | c3-101, c3-102, c3-103, c3-104 | `node/src/` |
-| **Go Stream** | Go | c3-105, c3-106, c3-107, c3-108 | `go/internal/` |
+| **Node.js Stream** | C3-1 Node.js | c3-101, c3-102, c3-103, c3-104 | `node/src/` |
+| **Go Stream** | C3-2 Go | c3-201, c3-202, c3-203, c3-204 | `go/internal/` |
 | **Integration Stream** | Both | IPC protocol, E2E tests | Both |
 
 ---
@@ -106,9 +106,9 @@ When tasks span both layers, check if parallel execution is possible:
 ┌────┬─────────────────────────┬─────────┬──────────────┐
 │ #  │ Story Name              │ Layer   │ C3 Component │
 ├────┼─────────────────────────┼─────────┼──────────────┤
-│ 1  │ add-volume-command      │ Both    │ c3-101, c3-107│
+│ 1  │ add-volume-command      │ Both    │ c3-101, c3-203│
 │ 2  │ implement-skip-command  │ Node.js │ c3-101, c3-103│
-│ 3  │ optimize-jitter-buffer  │ Go      │ c3-108       │
+│ 3  │ optimize-jitter-buffer  │ Go      │ c3-204       │
 └────┴─────────────────────────┴─────────┴──────────────┘
 
 **Options:**
@@ -141,9 +141,10 @@ flowchart LR
 | What | Where |
 |------|-------|
 | System Overview | `.c3/README.md` |
-| Container Architecture | `.c3/c3-1-container/README.md` |
-| Component Docs | `.c3/c3-1-container/c3-1XX-*/README.md` |
-| IPC Protocol | `.c3/c3-1-container/README.md` (Protocol section) |
+| Node.js Container | `.c3/c3-1-nodejs/README.md` |
+| Go Container | `.c3/c3-2-go-audio/README.md` |
+| Node.js Components | `.c3/c3-1-nodejs/c3-1XX-*/README.md` |
+| Go Components | `.c3/c3-2-go-audio/c3-2XX-*/README.md` |
 
 **Identify for each task:**
 - Which C3 component(s) affected
@@ -160,7 +161,7 @@ flowchart LR
 |------|-------|
 | Root Story | `docs/stories/{story}.md` |
 | Task Details | `docs/breakdowns/{story}/tasks/{task-id}.md` |
-| C3 Component Doc | `.c3/c3-1-container/c3-1XX-*/README.md` |
+| C3 Component Doc | `.c3/c3-1-nodejs/c3-1XX-*/README.md` or `.c3/c3-2-go-audio/c3-2XX-*/README.md` |
 | Related Files | Files mentioned in task |
 | Dependencies | Previous tasks in same story |
 
@@ -189,7 +190,7 @@ flowchart LR
 ### Code Changes
 1. Create volume command following play.ts pattern
 2. Add volume command type to socket commands
-3. Follow C3-101 interface from `.c3/c3-1-container/c3-101-discord-bot/README.md`
+3. Follow C3-101 interface from `.c3/c3-1-nodejs/c3-101-discord-bot/README.md`
 
 ### Verification
 - [ ] File exists at correct path
@@ -198,7 +199,7 @@ flowchart LR
 - [ ] Command registered with Discord
 
 ### Dependencies
-- Requires c3-107 Opus Encoder to support volume (Go task)
+- Requires c3-203 Opus Encoder to support volume (Go task)
 ```
 
 **Rules**:
@@ -220,10 +221,10 @@ Ready to implement:
 - T001: Add /volume command handler (c3-101)
 
 **Go Tasks:**
-- T002: Add volume to FFmpeg pipeline (c3-107)
+- T002: Add volume to FFmpeg pipeline (c3-203)
 
 **Integration Tasks:**
-- T003: Add volume to IPC protocol (c3-104 + c3-105)
+- T003: Add volume to IPC protocol (c3-104 + c3-201)
 
 Stream: [Node.js first] → [Go] → [Integration]
 
@@ -341,7 +342,7 @@ flowchart LR
 ```
 ✅ Task T001 complete! (c3-101 Discord Bot)
 
-Next pending task: T002 - Add volume to FFmpeg (c3-107 Go)
+Next pending task: T002 - Add volume to FFmpeg (c3-203 Go)
 Continue? (yes/no/pick different)
 ```
 
@@ -378,10 +379,10 @@ flowchart TB
         end
 
         subgraph GoStream["Go Stream"]
-            G1[c3-105 Tasks]
-            G2[c3-106 Tasks]
-            G3[c3-107 Tasks]
-            G4[c3-108 Tasks]
+            G1[c3-201 Tasks]
+            G2[c3-202 Tasks]
+            G3[c3-203 Tasks]
+            G4[c3-204 Tasks]
         end
 
         subgraph IntStream["Integration Stream"]
@@ -394,8 +395,8 @@ flowchart TB
     GoStream --> IntStream
 ```
 
-* **Node.js Stream:** c3-101 to c3-104 tasks
-* **Go Stream:** c3-105 to c3-108 tasks
+* **Node.js Stream:** c3-101 to c3-104 tasks (C3-1 container)
+* **Go Stream:** c3-201 to c3-204 tasks (C3-2 container)
 * **Integration Stream:** Cross-layer protocol and E2E tests
 
 ---
@@ -405,7 +406,7 @@ flowchart TB
 ```text
 ✅ Good for parallel (different layers):
 - Node.js Stream  ➜ c3-101 command (T001)
-- Go Stream       ➜ c3-107 encoder (T002)
+- Go Stream       ➜ c3-203 encoder (T002)
 
 ❌ Bad for parallel (cross-layer dependencies):
 - T003 (Integration) depends on T001 (Node.js) + T002 (Go)
@@ -416,7 +417,7 @@ flowchart TB
 
 ## Audio Quality Checks (for Go tasks)
 
-When modifying c3-107 Opus Encoder or c3-108 Jitter Buffer:
+When modifying c3-203 Opus Encoder or c3-204 Jitter Buffer:
 
 | Check | Required Value |
 |-------|----------------|
@@ -426,6 +427,6 @@ When modifying c3-107 Opus Encoder or c3-108 Jitter Buffer:
 | Bitrate | 128 kbps |
 | Jitter Buffer | 3-5 frames |
 
-Reference: `.c3/c3-1-container/c3-107-opus-encoder/README.md`
+Reference: `.c3/c3-2-go-audio/c3-203-opus-encoder/README.md`
 
 ---

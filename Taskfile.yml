@@ -1,0 +1,78 @@
+version: '3'
+
+vars:
+  SOCKET_PATH: /tmp/music-playground.sock
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  run:
+    desc: Start both servers (Go in background, Node.js in foreground)
+    cmds:
+      - task: kill
+      - |
+        echo "=== Audio Playground ==="
+        echo ""
+        echo "Starting Go server in background..."
+        go run cmd/playground/main.go &
+        GO_PID=$!
+        echo "Go server PID: $GO_PID"
+        sleep 2
+
+        echo ""
+        echo "Starting Node.js server..."
+        echo "Open http://localhost:3000 in your browser"
+        echo "Press Ctrl+C to stop both servers"
+        echo ""
+
+        cd playground && npm run dev
+
+        # When Node exits, kill Go
+        kill $GO_PID 2>/dev/null || true
+
+  go:
+    desc: Start only Go server
+    cmds:
+      - task: kill
+      - go run cmd/playground/main.go
+
+  node:
+    desc: Start only Node.js server
+    dir: playground
+    cmds:
+      - npm run dev
+
+  kill:
+    desc: Kill any running playground servers
+    cmds:
+      - |
+        pkill -f "go run cmd/playground" 2>/dev/null || true
+        pkill -f "cmd/playground/main" 2>/dev/null || true
+        pkill -f "playground/dist/index.js" 2>/dev/null || true
+        pkill -f "node dist/index.js" 2>/dev/null || true
+        rm -f {{.SOCKET_PATH}}
+        echo "Killed existing servers"
+
+  build:
+    desc: Build everything
+    cmds:
+      - go build -o bin/playground cmd/playground/main.go
+      - cd playground && npm run build
+      - echo "Build complete"
+
+  install:
+    desc: Install dependencies
+    cmds:
+      - cd playground && npm install
+      - echo "Dependencies installed"
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf bin/
+      - rm -rf playground/dist/
+      - rm -f {{.SOCKET_PATH}}
+      - echo "Cleaned"

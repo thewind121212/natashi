@@ -19,26 +19,26 @@ This is **for developers**, not business stakeholders. Keep it tight, technical,
 
 ```mermaid
 flowchart TB
-    subgraph Container["Music Bot Architecture"]
-        subgraph NodeJS["Node.js (Brain)"]
+    subgraph System["Music Bot Architecture"]
+        subgraph C3_1["C3-1: Node.js Application"]
             C101[c3-101 Discord Bot]
             C102[c3-102 Voice Manager]
             C103[c3-103 Queue Manager]
             C104[c3-104 Socket Client]
         end
 
-        subgraph Go["Go (Audio Processor)"]
-            C105[c3-105 Audio Processor]
-            C106[c3-106 Stream Extractor]
-            C107[c3-107 Opus Encoder]
-            C108[c3-108 Jitter Buffer]
+        subgraph C3_2["C3-2: Go Audio Application"]
+            C201[c3-201 Audio Processor]
+            C202[c3-202 Stream Extractor]
+            C203[c3-203 Opus Encoder]
+            C204[c3-204 Jitter Buffer]
         end
     end
 
     C101 --> C102 --> C104
     C101 --> C103
-    C104 <--> C105
-    C105 --> C106 --> C107 --> C108
+    C104 <--> C201
+    C201 --> C202 --> C203 --> C204
 ```
 
 **C3 Documentation:** `.c3/` folder contains full architecture details.
@@ -72,20 +72,23 @@ flowchart LR
 
 1. **Read C3 architecture:**
    - `.c3/README.md` - System overview
-   - `.c3/c3-1-container/README.md` - Container architecture
-   - `.c3/c3-1-container/c3-1XX-*/README.md` - Relevant components
+   - `.c3/c3-0-context/README.md` - System context
+   - `.c3/c3-1-nodejs/README.md` - Node.js container
+   - `.c3/c3-2-go-audio/README.md` - Go container
+   - `.c3/c3-1-nodejs/c3-1XX-*/README.md` - Node.js components
+   - `.c3/c3-2-go-audio/c3-2XX-*/README.md` - Go components
 
 2. **Identify affected C3 components:**
 
-| If change involves... | C3 Components | Layer |
-|-----------------------|---------------|-------|
-| Discord commands | c3-101 Discord Bot | Node.js |
-| Voice connections | c3-102 Voice Manager | Node.js |
-| Queue/playlist logic | c3-103 Queue Manager | Node.js |
-| IPC protocol | c3-104 Socket Client + c3-105 Audio Processor | Both |
-| Stream extraction | c3-106 Stream Extractor | Go |
-| Audio encoding | c3-107 Opus Encoder | Go |
-| Audio buffering | c3-108 Jitter Buffer | Go |
+| If change involves... | C3 Components | Container |
+|-----------------------|---------------|-----------|
+| Discord commands | c3-101 Discord Bot | C3-1 Node.js |
+| Voice connections | c3-102 Voice Manager | C3-1 Node.js |
+| Queue/playlist logic | c3-103 Queue Manager | C3-1 Node.js |
+| IPC protocol | c3-104 Socket Client + c3-201 Audio Processor | Both |
+| Stream extraction | c3-202 Stream Extractor | C3-2 Go |
+| Audio encoding | c3-203 Opus Encoder | C3-2 Go |
+| Audio buffering | c3-204 Jitter Buffer | C3-2 Go |
 
 3. **Scan repo for existing patterns:**
    - `node/src/` - Node.js layer
@@ -235,7 +238,8 @@ List concrete references proving the current flow.
 Format:
 - `path/to/file.ext` — what it shows (1 line)
 - `path/to/another.ts` — what it shows (1 line)
-- `.c3/c3-1-container/c3-1XX-*/README.md` — C3 component docs
+- `.c3/c3-1-nodejs/c3-1XX-*/README.md` — Node.js component docs
+- `.c3/c3-2-go-audio/c3-2XX-*/README.md` — Go component docs
 
 If you cannot locate evidence, write:
 - **Unknown:** <what's unknown>

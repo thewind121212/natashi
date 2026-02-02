@@ -29,9 +29,13 @@ func (e *Extractor) CanHandle(url string) bool {
 // ExtractStreamURL extracts the direct audio stream URL from a YouTube URL.
 func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
 	cmd := exec.Command("yt-dlp",
-		"--no-playlist",        // single video only
-		"-f", "bestaudio/best", // best audio quality available
-		"--get-url", // print direct stream URL only (no download)
+		"--no-playlist",           // single video only
+		"--no-warnings",           // suppress warnings for speed
+		"--no-check-certificate",  // skip SSL verification (faster)
+		"--socket-timeout", "10",  // shorter timeout
+		"--extractor-args", "youtube:player_client=android", // faster extraction
+		"-f", "bestaudio[ext=webm]/bestaudio/best", // prefer webm (opus) for speed
+		"--get-url",               // print direct stream URL only
 		youtubeURL,
 	)
 
