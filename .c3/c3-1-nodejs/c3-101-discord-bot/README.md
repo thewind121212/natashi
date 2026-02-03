@@ -12,12 +12,12 @@ flowchart TB
         CLIENT[Discord.js Client]
 
         subgraph Commands["Slash Commands"]
-            PLAY[/play]
-            PAUSE[/pause]
-            RESUME[/resume]
-            STOP[/stop]
-            SKIP[/skip]
-            LIST[/list]
+            PLAY["/play"]
+            PAUSE["/pause"]
+            RESUME["/resume"]
+            STOP["/stop"]
+            SKIP["/skip"]
+            LIST["/list"]
         end
 
         HANDLER[Command Handler]

@@ -26,7 +26,7 @@ flowchart TB
         DISCORD[Discord API]
     end
 
-    subgraph C3_1["C3-1: Node.js Application :3000"]
+    subgraph C3_1["C3-1: Node.js Application :3000<br/>(Brain - Orchestrator)"]
         c3_101[c3-101<br/>Discord Bot]
         c3_102[c3-102<br/>Voice Manager]
         c3_103[c3-103<br/>Queue Manager]
@@ -36,7 +36,7 @@ flowchart TB
         c3_107[c3-107<br/>WebSocket Handler]
     end
 
-    subgraph C3_2["C3-2: Go Audio Application"]
+    subgraph C3_2["C3-2: Go Audio Application<br/>(Audio Engine)"]
         GO_API[Gin API :8180]
         GO_SOCKET[Unix Socket]
     end
@@ -47,10 +47,19 @@ flowchart TB
     c3_101 --> c3_102
     c3_101 --> c3_103
     c3_102 --> c3_104
-    c3_104 -->|HTTP| GO_API
-    c3_105 <-->|Unix Socket| GO_SOCKET
+    c3_104 -->|"Control: play/stop/pause"| GO_API
+    GO_SOCKET -->|"Data: audio chunks + events"| c3_105
     c3_107 <--> c3_105
 ```
+
+### Communication Pattern
+
+| Channel | Direction | What | Protocol |
+|---------|-----------|------|----------|
+| **Control Plane** | Node.js → Go | Commands (play, stop, pause, resume) | HTTP REST :8180 |
+| **Data Plane** | Go → Node.js | Audio chunks + events (ready, progress, finished) | Unix Socket |
+
+> **Node.js is the brain**: It tells Go what to do. Go processes audio and streams it back.
 
 ## Components
 
