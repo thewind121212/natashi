@@ -14,6 +14,7 @@ interface QueueListProps {
   queue: Track[];
   currentIndex: number;
   onRemove: (index: number) => void;
+  onPlay: (index: number) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -27,20 +28,25 @@ function QueueItem({
   index,
   isCurrent,
   onRemove,
+  onPlay,
 }: {
   track: Track;
   index: number;
   isCurrent: boolean;
   onRemove: () => void;
+  onPlay: () => void;
 }) {
   return (
     <div
-      className={`flex items-center gap-3 p-2 rounded-md ${
-        isCurrent ? 'bg-cyan-950 border border-cyan-700' : 'bg-muted/50'
+      onClick={onPlay}
+      className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
+        isCurrent
+          ? 'bg-cyan-950 border border-cyan-700'
+          : 'bg-muted/50 hover:bg-muted'
       }`}
     >
       <span className="text-xs text-muted-foreground w-6 text-center">
-        {isCurrent ? '>' : index + 1}
+        {isCurrent ? '▶' : index + 1}
       </span>
       {track.thumbnail && (
         <img
@@ -60,16 +66,16 @@ function QueueItem({
       <Button
         variant="ghost"
         size="sm"
-        onClick={onRemove}
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
         className="text-muted-foreground hover:text-red-400 h-8 w-8 p-0"
       >
-        x
+        ×
       </Button>
     </div>
   );
 }
 
-export function QueueList({ queue, currentIndex, onRemove }: QueueListProps) {
+export function QueueList({ queue, currentIndex, onRemove, onPlay }: QueueListProps) {
   if (queue.length === 0) {
     return (
       <Card>
@@ -102,6 +108,7 @@ export function QueueList({ queue, currentIndex, onRemove }: QueueListProps) {
                 index={index}
                 isCurrent={index === currentIndex}
                 onRemove={() => onRemove(index)}
+                onPlay={() => onPlay(index)}
               />
             ))}
           </div>

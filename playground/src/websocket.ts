@@ -355,6 +355,42 @@ export class WebSocketHandler {
           this.log('nodejs', `Removed track at index ${message.index}`);
         }
 
+      } else if (message.action === 'playFromQueue' && typeof message.index === 'number') {
+        // Play specific track from queue
+        this.log('nodejs', `playFromQueue: index=${message.index}`);
+
+        // Stop current playback FIRST
+        if (this.currentSessionId) {
+          try {
+            await this.apiClient.stop(this.currentSessionId);
+          } catch (err) {
+            this.log('nodejs', `Stop error: ${err}`);
+          }
+          this.audioPlayer.stop();
+        }
+        this.currentSessionId = null;
+
+        // Now update queue and get track
+        const track = this.queueManager.startPlaying(message.index);
+        if (track) {
+          this.log('nodejs', `Playing from queue: ${track.title}`);
+
+          // Reset playback state
+          this.bytesReceived = 0;
+          this.isPaused = false;
+          this.isStreamReady = false;
+
+          // Broadcast now playing
+          this.broadcastJson({
+            type: 'nowPlaying',
+            nowPlaying: track,
+          });
+
+          await this.playTrack(track.url);
+        } else {
+          this.log('nodejs', `Invalid queue index: ${message.index}`);
+        }
+
       } else if (message.action === 'skip') {
         // Skip to next track
         this.log('nodejs', 'Skip requested');
