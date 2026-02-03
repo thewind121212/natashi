@@ -29,6 +29,7 @@ function App() {
     clearLogs,
     addToQueue,
     removeFromQueue,
+    playFromQueue,
     skip,
     clearQueue,
   } = useWebSocket();
@@ -210,6 +211,7 @@ function App() {
             queue={queue}
             currentIndex={currentIndex}
             onRemove={removeFromQueue}
+            onPlay={playFromQueue}
           />
         </div>
 

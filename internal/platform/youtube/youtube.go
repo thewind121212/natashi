@@ -140,11 +140,18 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 			url = "https://www.youtube.com/watch?v=" + entry.ID
 		}
 
+		// Build thumbnail URL from video ID if not provided
+		// YouTube thumbnails have predictable URLs: https://i.ytimg.com/vi/{ID}/mqdefault.jpg
+		thumbnail := entry.Thumbnail
+		if thumbnail == "" && entry.ID != "" {
+			thumbnail = "https://i.ytimg.com/vi/" + entry.ID + "/mqdefault.jpg"
+		}
+
 		entries = append(entries, PlaylistEntry{
 			URL:       url,
 			Title:     entry.Title,
 			Duration:  entry.Duration,
-			Thumbnail: entry.Thumbnail,
+			Thumbnail: thumbnail,
 		})
 	}
 

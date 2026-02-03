@@ -59,3 +59,11 @@ func NewFinishedEvent(sessionID string) Event {
 		SessionID: sessionID,
 	}
 }
+
+// TrackMetadata contains information about a track (for queue display).
+type TrackMetadata struct {
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Duration  int    `json:"duration"`  // seconds
+	Thumbnail string `json:"thumbnail"` // thumbnail URL
+}

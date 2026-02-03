@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"syscall"
 )
 
 // FFmpegPipeline implements Pipeline using FFmpeg for decoding and encoding.
@@ -69,6 +70,53 @@ func (p *FFmpegPipeline) Stop() {
 	}
 }
 
+// Pause pauses FFmpeg using SIGSTOP and drains buffered output.
+func (p *FFmpegPipeline) Pause() {
+	if p.cmd != nil && p.cmd.Process != nil {
+		// Send SIGSTOP to pause FFmpeg process
+		p.cmd.Process.Signal(syscall.SIGSTOP)
+		fmt.Printf("[FFmpeg] Paused (SIGSTOP) PID %d\n", p.cmd.Process.Pid)
+
+		// Drain any buffered chunks to prevent stale audio on resume
+		drained := 0
+		for {
+			select {
+			case <-p.output:
+				drained++
+			default:
+				if drained > 0 {
+					fmt.Printf("[FFmpeg] Drained %d buffered chunks\n", drained)
+				}
+				return
+			}
+		}
+	}
+}
+
+// Resume resumes FFmpeg using SIGCONT.
+func (p *FFmpegPipeline) Resume() {
+	if p.cmd != nil && p.cmd.Process != nil {
+		// Drain any remaining buffered chunks first
+		drained := 0
+		for {
+			select {
+			case <-p.output:
+				drained++
+			default:
+				goto done
+			}
+		}
+	done:
+		if drained > 0 {
+			fmt.Printf("[FFmpeg] Drained %d stale chunks before resume\n", drained)
+		}
+
+		// Send SIGCONT to resume FFmpeg process
+		p.cmd.Process.Signal(syscall.SIGCONT)
+		fmt.Printf("[FFmpeg] Resumed (SIGCONT) PID %d\n", p.cmd.Process.Pid)
+	}
+}
+
 // buildArgs constructs FFmpeg command arguments based on format.
 func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 	volume := fmt.Sprintf("volume=%.2f", p.config.Volume)
@@ -102,20 +150,12 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 			"-f", "s16le",
 			"pipe:1",
 		)
-	case FormatRaw:
-		// Raw Opus frames - for Discord (future)
+	case FormatOpus:
+		// Opus encoded frames - for Discord voice UDP
 		args = append(args,
 			"-c:a", "libopus",
 			"-b:a", fmt.Sprintf("%d", p.config.Bitrate),
 			"-f", "opus",
-			"pipe:1",
-		)
-	case FormatWebM:
-		// WebM container - for browser (not used now)
-		args = append(args,
-			"-c:a", "libopus",
-			"-b:a", fmt.Sprintf("%d", p.config.Bitrate),
-			"-f", "webm",
 			"pipe:1",
 		)
 	}

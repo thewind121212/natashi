@@ -11,68 +11,38 @@ tasks:
 
   run:
     desc: Start all servers (Go + Node.js backend + Vite client) - no audio output
+    dir: playground
     cmds:
       - task: kill
       - |
         echo "=== Audio Playground ==="
         echo ""
-        echo "Starting Go server in background..."
-        go run cmd/playground/main.go &
-        GO_PID=$!
-        echo "Go server PID: $GO_PID"
-        sleep 2
-
+        echo "Go:      http://localhost:8180"
+        echo "Node.js: http://localhost:3000"
+        echo "Vite:    http://localhost:5173"
         echo ""
-        echo "Starting Node.js backend in background..."
-        cd playground && npm run dev &
-        NODE_PID=$!
-        echo "Node.js server PID: $NODE_PID"
-        sleep 2
-
-        echo ""
-        echo "Starting Vite client..."
-        echo "Open http://localhost:5173 in your browser"
         echo "Press Ctrl+C to stop all servers"
+        echo "=========================================="
         echo ""
-
-        cd playground/client && npm run dev
-
-        # When Vite exits, kill Go and Node
-        kill $GO_PID 2>/dev/null || true
-        kill $NODE_PID 2>/dev/null || true
+      - npx concurrently --kill-others --names "Go,Node,Vite" --prefix-colors "cyan,green,magenta" --prefix "[{name}]" "cd .. && go run cmd/playground/main.go" "npm run dev" "cd client && npx vite --clearScreen false"
 
   run:debug:
     desc: Start all servers with DEBUG mode (audio plays to macOS speakers)
+    dir: playground
     cmds:
       - task: kill
       - |
         echo "=== Audio Playground (DEBUG MODE) ==="
+        echo "Audio: PCM s16le 48kHz -> ffplay -> macOS speakers"
         echo ""
-        echo "Starting Go server in background..."
-        go run cmd/playground/main.go &
-        GO_PID=$!
-        echo "Go server PID: $GO_PID"
-        sleep 2
-
+        echo "Go:      http://localhost:8180"
+        echo "Node.js: http://localhost:3000"
+        echo "Vite:    http://localhost:5173"
         echo ""
-        echo "Starting Node.js backend in background (DEBUG=1)..."
-        cd playground && DEBUG_AUDIO=1 npm run dev &
-        NODE_PID=$!
-        echo "Node.js server PID: $NODE_PID"
-        sleep 2
-
-        echo ""
-        echo "Starting Vite client..."
-        echo "Open http://localhost:5173 in your browser"
-        echo "Audio will play to macOS speakers!"
         echo "Press Ctrl+C to stop all servers"
+        echo "=========================================="
         echo ""
-
-        cd playground/client && npm run dev
-
-        # When Vite exits, kill Go and Node
-        kill $GO_PID 2>/dev/null || true
-        kill $NODE_PID 2>/dev/null || true
+      - npx concurrently --kill-others --names "Go,Node,Vite" --prefix-colors "cyan,green,magenta" --prefix "[{name}]" "cd .. && go run cmd/playground/main.go" "DEBUG_AUDIO=1 npm run dev" "cd client && npx vite --clearScreen false"
 
   go:
     desc: Start only Go server

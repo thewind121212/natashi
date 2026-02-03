@@ -44,6 +44,7 @@ interface UseWebSocketReturn {
   clearLogs: () => void;
   addToQueue: (url: string) => void;
   removeFromQueue: (index: number) => void;
+  playFromQueue: (index: number) => void;
   skip: () => void;
   clearQueue: () => void;
 }
@@ -355,6 +356,11 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', 'Queue cleared');
   }, [updateStatus, addLog]);
 
+  const playFromQueue = useCallback((index: number) => {
+    wsRef.current?.send(JSON.stringify({ action: 'playFromQueue', index }));
+    addLog('nodejs', `Playing track ${index + 1} from queue`);
+  }, [addLog]);
+
   return {
     isConnected,
     debugMode,
@@ -375,6 +381,7 @@ export function useWebSocket(): UseWebSocketReturn {
     clearLogs,
     addToQueue,
     removeFromQueue,
+    playFromQueue,
     skip,
     clearQueue,
   };

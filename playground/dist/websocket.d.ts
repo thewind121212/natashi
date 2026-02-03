@@ -4,6 +4,7 @@ export declare class WebSocketHandler {
     private socketClient;
     private apiClient;
     private audioPlayer;
+    private queueManager;
     private clients;
     private currentSessionId;
     private bytesReceived;
@@ -14,11 +15,14 @@ export declare class WebSocketHandler {
     private log;
     private setupWebSocket;
     private setupAudioPlayer;
+    private setupQueueManager;
     connect(): Promise<void>;
     private resetPlaybackState;
+    private playTrack;
     private handleGoEvent;
     private handleBrowserMessage;
     private broadcastJson;
+    private extractVideoId;
     isConnected(): boolean;
 }
 //# sourceMappingURL=websocket.d.ts.map

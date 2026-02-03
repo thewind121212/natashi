@@ -63,6 +63,15 @@ export class AudioPlayer extends EventEmitter {
       this.emit('error', err);
     });
 
+    // Handle stdin errors (EPIPE when ffplay exits)
+    this.ffplay.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EPIPE') {
+        // Expected when ffplay exits - ignore
+        return;
+      }
+      console.error('[AudioPlayer] stdin error:', err.message);
+    });
+
     console.log('[AudioPlayer] Started, PID:', this.ffplay.pid);
   }
 
@@ -74,11 +83,16 @@ export class AudioPlayer extends EventEmitter {
       return false;
     }
 
+    // Check if stdin is still writable
+    if (this.ffplay.stdin.destroyed || !this.ffplay.stdin.writable) {
+      return false;
+    }
+
     try {
       this.bytesWritten += data.length;
       return this.ffplay.stdin.write(data);
-    } catch (err) {
-      console.error('[AudioPlayer] Write error:', err);
+    } catch {
+      // Ignore write errors (EPIPE, etc.) - ffplay might have exited
       return false;
     }
   }
