@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"music-bot/internal/platform/youtube"
 )
 
 // API handles HTTP control endpoints.
@@ -38,6 +39,32 @@ type StatusResponse struct {
 	Status    string `json:"status"`
 	BytesSent int64  `json:"bytes_sent"`
 	URL       string `json:"url,omitempty"`
+}
+
+// MetadataResponse is the response for metadata endpoint.
+type MetadataResponse struct {
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Duration   int    `json:"duration"`
+	Thumbnail  string `json:"thumbnail"`
+	IsPlaylist bool   `json:"is_playlist"`
+	Error      string `json:"error,omitempty"`
+}
+
+// PlaylistEntry represents a video in a playlist.
+type PlaylistEntry struct {
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Duration  int    `json:"duration"`
+	Thumbnail string `json:"thumbnail"`
+}
+
+// PlaylistResponse is the response for playlist endpoint.
+type PlaylistResponse struct {
+	URL     string          `json:"url"`
+	Count   int             `json:"count"`
+	Entries []PlaylistEntry `json:"entries"`
+	Error   string          `json:"error,omitempty"`
 }
 
 // Play starts a new playback session.
@@ -188,5 +215,103 @@ func (a *API) Status(c *gin.Context) {
 		Status:    session.GetStateString(),
 		BytesSent: session.BytesSent,
 		URL:       session.URL,
+	})
+}
+
+// Metadata extracts track metadata without starting playback.
+func (a *API) Metadata(c *gin.Context) {
+	url := c.Query("url")
+	if url == "" {
+		c.JSON(http.StatusBadRequest, MetadataResponse{
+			Error: "url query parameter is required",
+		})
+		return
+	}
+
+	fmt.Printf("[API] Metadata request: url=%s\n", url)
+
+	extractor := youtube.New()
+	if !extractor.CanHandle(url) {
+		c.JSON(http.StatusBadRequest, MetadataResponse{
+			URL:   url,
+			Error: "unsupported URL (only YouTube supported)",
+		})
+		return
+	}
+
+	// Check if it's a playlist
+	isPlaylist := extractor.IsPlaylist(url)
+
+	meta, err := extractor.ExtractMetadata(url)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, MetadataResponse{
+			URL:   url,
+			Error: fmt.Sprintf("failed to extract metadata: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, MetadataResponse{
+		URL:        url,
+		Title:      meta.Title,
+		Duration:   meta.Duration,
+		Thumbnail:  meta.Thumbnail,
+		IsPlaylist: isPlaylist,
+	})
+}
+
+// Playlist extracts all videos from a YouTube playlist.
+func (a *API) Playlist(c *gin.Context) {
+	url := c.Query("url")
+	if url == "" {
+		c.JSON(http.StatusBadRequest, PlaylistResponse{
+			Error: "url query parameter is required",
+		})
+		return
+	}
+
+	fmt.Printf("[API] Playlist request: url=%s\n", url)
+
+	extractor := youtube.New()
+	if !extractor.CanHandle(url) {
+		c.JSON(http.StatusBadRequest, PlaylistResponse{
+			URL:   url,
+			Error: "unsupported URL (only YouTube supported)",
+		})
+		return
+	}
+
+	if !extractor.IsPlaylist(url) {
+		c.JSON(http.StatusBadRequest, PlaylistResponse{
+			URL:   url,
+			Error: "URL is not a playlist",
+		})
+		return
+	}
+
+	entries, err := extractor.ExtractPlaylist(url)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, PlaylistResponse{
+			URL:   url,
+			Error: fmt.Sprintf("failed to extract playlist: %v", err),
+		})
+		return
+	}
+
+	// Convert to API response type
+	apiEntries := make([]PlaylistEntry, len(entries))
+	for i, e := range entries {
+		apiEntries[i] = PlaylistEntry{
+			URL:       e.URL,
+			Title:     e.Title,
+			Duration:  e.Duration,
+			Thumbnail: e.Thumbnail,
+		}
+	}
+
+	c.JSON(http.StatusOK, PlaylistResponse{
+		URL:     url,
+		Count:   len(apiEntries),
+		Entries: apiEntries,
 	})
 }

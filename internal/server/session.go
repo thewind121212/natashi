@@ -54,8 +54,7 @@ type Session struct {
 	Cancel    context.CancelFunc
 	BytesSent int64
 	isPaused  bool
-	pauseCh   chan struct{} // Signal to pause
-	resumeCh  chan struct{} // Signal to resume
+	resumeCh  chan struct{} // Signal to resume from pause
 	mu        sync.Mutex
 }
 
@@ -99,18 +98,18 @@ func (m *SessionManager) GetConnection() net.Conn {
 func (m *SessionManager) StartPlayback(id string, url string, formatStr string) error {
 	m.mu.Lock()
 
-	// Stop existing session with same ID if any
-	if existing, ok := m.sessions[id]; ok {
+	// Stop ALL existing sessions - only one session should play at a time
+	// This prevents duplicate audio streams when user clicks play rapidly
+	for existingID, existing := range m.sessions {
+		fmt.Printf("[Session] Stopping existing session %s for new playback\n", existingID[:8])
 		existing.Stop()
-		delete(m.sessions, id)
+		delete(m.sessions, existingID)
 	}
 
 	// Determine format
 	format := encoder.FormatPCM
-	if formatStr == "raw" {
-		format = encoder.FormatRaw
-	} else if formatStr == "webm" {
-		format = encoder.FormatWebM
+	if formatStr == "opus" {
+		format = encoder.FormatOpus
 	}
 
 	session := &Session{
@@ -118,7 +117,6 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string) 
 		State:    StateIdle,
 		URL:      url,
 		Format:   format,
-		pauseCh:  make(chan struct{}, 1),
 		resumeCh: make(chan struct{}, 1),
 	}
 	m.sessions[id] = session
@@ -132,6 +130,12 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string) 
 
 // runPlayback runs the playback pipeline for a session.
 func (m *SessionManager) runPlayback(session *Session) {
+	// Create cancellable context FIRST - allows Stop() to cancel during extraction
+	sessionCtx, cancel := context.WithCancel(m.ctx)
+	session.mu.Lock()
+	session.Cancel = cancel
+	session.mu.Unlock()
+
 	session.SetState(StateExtracting)
 	fmt.Printf("[Session] Starting playback for %s\n", session.ID[:8])
 
@@ -143,6 +147,14 @@ func (m *SessionManager) runPlayback(session *Session) {
 		return
 	}
 
+	// Check if cancelled before extraction
+	select {
+	case <-sessionCtx.Done():
+		fmt.Printf("[Session] Cancelled before extraction %s\n", session.ID[:8])
+		return
+	default:
+	}
+
 	// Extract stream URL
 	fmt.Println("[Session] Extracting stream URL...")
 	streamURL, err := extractor.ExtractStreamURL(session.URL)
@@ -151,18 +163,21 @@ func (m *SessionManager) runPlayback(session *Session) {
 		m.sendEvent(session.ID, "error", fmt.Sprintf("extraction failed: %v", err))
 		return
 	}
+
+	// Check if cancelled after extraction (user clicked play again during yt-dlp)
+	select {
+	case <-sessionCtx.Done():
+		fmt.Printf("[Session] Cancelled after extraction %s\n", session.ID[:8])
+		return
+	default:
+	}
+
 	fmt.Printf("[Session] Stream URL extracted (length: %d)\n", len(streamURL))
 
 	// Create encoding pipeline
 	pipeline := encoder.NewDefaultPipeline()
 	session.mu.Lock()
 	session.Pipeline = pipeline
-	session.mu.Unlock()
-
-	// Create cancellable context for this session
-	sessionCtx, cancel := context.WithCancel(m.ctx)
-	session.mu.Lock()
-	session.Cancel = cancel
 	session.mu.Unlock()
 
 	// Start pipeline
@@ -192,25 +207,51 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-session.pauseCh:
-			// Paused - wait for resume
-			session.SetState(StatePaused)
-			fmt.Printf("[Session] Paused %s\n", session.ID[:8])
-			select {
-			case <-ctx.Done():
-				return
-			case <-session.resumeCh:
-				session.SetState(StateStreaming)
-				fmt.Printf("[Session] Resumed %s\n", session.ID[:8])
-			}
 		case chunk, ok := <-session.Pipeline.Output():
 			if !ok {
 				return // Channel closed
 			}
 
+			// Check if paused BEFORE writing (immediate response)
+			session.mu.Lock()
+			paused := session.isPaused
+			session.mu.Unlock()
+
+			if paused {
+				session.SetState(StatePaused)
+				fmt.Printf("[Session] Paused %s (dropping chunk)\n", session.ID[:8])
+
+				// Drain any stale resume signals before waiting
+				select {
+				case <-session.resumeCh:
+				default:
+				}
+
+				// Wait for resume signal
+			waitLoop:
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-session.resumeCh:
+						// Check if actually resumed (not a stale signal)
+						session.mu.Lock()
+						stillPaused := session.isPaused
+						session.mu.Unlock()
+						if !stillPaused {
+							session.SetState(StateStreaming)
+							fmt.Printf("[Session] Resumed %s\n", session.ID[:8])
+							break waitLoop
+						}
+						// Still paused, keep waiting
+					}
+				}
+				continue // Get next chunk after resume
+			}
+
 			conn := m.GetConnection()
 			if conn == nil {
-				continue // No connection, skip chunk
+				continue // No connection, skip chunk (will retry on next chunk)
 			}
 
 			// Write length header (4 bytes big-endian)
@@ -223,11 +264,14 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 			}
 
 			if _, err := conn.Write(header); err != nil {
-				fmt.Printf("[Session] Write header error: %v\n", err)
+				// Connection broken - clear it and wait for reconnect
+				fmt.Printf("[Session] Write error (connection lost): %v\n", err)
+				m.SetConnection(nil)
 				continue
 			}
 			if _, err := conn.Write(chunk); err != nil {
-				fmt.Printf("[Session] Write chunk error: %v\n", err)
+				fmt.Printf("[Session] Write error (connection lost): %v\n", err)
+				m.SetConnection(nil)
 				continue
 			}
 
@@ -292,13 +336,12 @@ func (m *SessionManager) Pause(id string) error {
 		return nil // Already paused
 	}
 	session.isPaused = true
-	session.mu.Unlock()
 
-	// Signal pause
-	select {
-	case session.pauseCh <- struct{}{}:
-	default:
+	// Pause the pipeline (SIGSTOP to FFmpeg + drain buffer)
+	if session.Pipeline != nil {
+		session.Pipeline.Pause()
 	}
+	session.mu.Unlock()
 
 	return nil
 }
@@ -318,10 +361,16 @@ func (m *SessionManager) Resume(id string) error {
 		session.mu.Unlock()
 		return nil // Not paused
 	}
+
+	// Resume the pipeline (SIGCONT to FFmpeg)
+	if session.Pipeline != nil {
+		session.Pipeline.Resume()
+	}
+
 	session.isPaused = false
 	session.mu.Unlock()
 
-	// Signal resume
+	// Signal resume to streamAudio goroutine
 	select {
 	case session.resumeCh <- struct{}{}:
 	default:

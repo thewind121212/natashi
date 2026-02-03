@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { LogEntry } from '@/components/LogViewer';
 
+interface Track {
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail?: string;
+  addedAt: string;
+}
+
 interface WebSocketMessage {
   type: string;
   debugMode?: boolean;
@@ -11,6 +19,9 @@ interface WebSocketMessage {
   bytes?: number;
   playback_secs?: number;
   source?: 'go' | 'nodejs';
+  queue?: Track[];
+  currentIndex?: number;
+  nowPlaying?: Track | null;
 }
 
 interface UseWebSocketReturn {
@@ -20,24 +31,29 @@ interface UseWebSocketReturn {
   status: string;
   statusType: 'normal' | 'error' | 'success';
   isPlaying: boolean;
+  currentUrl: string | null;
+  playbackTime: number;
   logs: LogEntry[];
+  queue: Track[];
+  currentIndex: number;
+  nowPlaying: Track | null;
   play: (url: string) => void;
   stop: () => void;
   pause: () => void;
   resume: () => void;
   clearLogs: () => void;
+  addToQueue: (url: string) => void;
+  removeFromQueue: (index: number) => void;
+  skip: () => void;
+  clearQueue: () => void;
 }
+
+export type { Track };
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-};
-
-const formatTime = (secs: number): string => {
-  const mins = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return mins + ':' + (s < 10 ? '0' : '') + s;
 };
 
 export function useWebSocket(): UseWebSocketReturn {
@@ -49,10 +65,15 @@ export function useWebSocket(): UseWebSocketReturn {
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [status, setStatus] = useState('Ready. Paste a YouTube URL and click Play.');
+  const [status, setStatus] = useState('Ready');
   const [statusType, setStatusType] = useState<'normal' | 'error' | 'success'>('normal');
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState<string | null>(null);
+  const [playbackTime, setPlaybackTime] = useState(0); // seconds
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [queue, setQueue] = useState<Track[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
 
   const addLog = useCallback((source: 'go' | 'nodejs', message: string) => {
     if (!mountedRef.current) return;
@@ -86,26 +107,48 @@ export function useWebSocket(): UseWebSocketReturn {
         setDebugMode(!!msg.debugMode);
         setIsPaused(!!msg.isPaused);
         setIsPlaying(!!msg.isPlaying);
+        if (msg.queue) setQueue(msg.queue);
+        if (typeof msg.currentIndex === 'number') setCurrentIndex(msg.currentIndex);
+        if (msg.nowPlaying !== undefined) setNowPlaying(msg.nowPlaying);
+        break;
+
+      case 'queueUpdated':
+        if (msg.queue) setQueue(msg.queue);
+        if (typeof msg.currentIndex === 'number') setCurrentIndex(msg.currentIndex);
+        if (msg.nowPlaying !== undefined) setNowPlaying(msg.nowPlaying);
+        break;
+
+      case 'nowPlaying':
+        if (msg.nowPlaying) setNowPlaying(msg.nowPlaying);
+        break;
+
+      case 'queueFinished':
+        updateStatus('Queue finished', 'normal');
+        setIsPlaying(false);
+        addLog('nodejs', 'Queue finished');
         break;
 
       case 'session':
-        updateStatus('Extracting audio...');
+        updateStatus('Extracting...', 'normal');
         addLog('nodejs', `Session started: ${msg.session_id}`);
         setIsPlaying(true);
         setIsPaused(false);
+        setPlaybackTime(0);
         break;
 
       case 'ready': {
         const readyTime = playStartTimeRef.current ? Date.now() - playStartTimeRef.current : 0;
-        updateStatus('▶ Playing (ready in ' + readyTime + 'ms)', 'success');
+        updateStatus('Playing', 'success');
         setIsPlaying(true);
         addLog('nodejs', `Stream ready (${readyTime}ms)`);
         break;
       }
 
       case 'progress': {
-        const playbackTime = formatTime(msg.playback_secs || 0);
-        updateStatus('▶ ' + playbackTime + ' | ' + formatBytes(msg.bytes || 0), 'success');
+        // Update playback time
+        if (typeof msg.playback_secs === 'number') {
+          setPlaybackTime(msg.playback_secs);
+        }
         break;
       }
 
@@ -113,6 +156,8 @@ export function useWebSocket(): UseWebSocketReturn {
         updateStatus('Error: ' + msg.message, 'error');
         setIsPlaying(false);
         setIsPaused(false);
+        setCurrentUrl(null);
+        setNowPlaying(null);
         playStartTimeRef.current = null;
         addLog('nodejs', `Error: ${msg.message}`);
         break;
@@ -121,9 +166,11 @@ export function useWebSocket(): UseWebSocketReturn {
         const totalTime = playStartTimeRef.current
           ? ((Date.now() - playStartTimeRef.current) / 1000).toFixed(1)
           : '?';
-        updateStatus('✓ Finished in ' + totalTime + 's | Total: ' + formatBytes(msg.bytes || 0));
+        updateStatus('Track finished', 'normal');
         setIsPlaying(false);
         setIsPaused(false);
+        setCurrentUrl(null);
+        setNowPlaying(null);
         playStartTimeRef.current = null;
         addLog('nodejs', `Finished (${totalTime}s, ${formatBytes(msg.bytes || 0)})`);
         break;
@@ -134,6 +181,8 @@ export function useWebSocket(): UseWebSocketReturn {
         updateStatus('Playback stopped');
         setIsPlaying(false);
         setIsPaused(false);
+        setCurrentUrl(null);
+        setNowPlaying(null);
         playStartTimeRef.current = null;
         addLog('nodejs', 'Playback stopped');
         break;
@@ -240,6 +289,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     playStartTimeRef.current = Date.now();
+    setCurrentUrl(url.trim());
     updateStatus('Starting...');
     addLog('nodejs', `Play requested: ${url.trim()}`);
     wsRef.current.send(JSON.stringify({
@@ -268,6 +318,43 @@ export function useWebSocket(): UseWebSocketReturn {
     setLogs([]);
   }, []);
 
+  const addToQueue = useCallback((url: string) => {
+    if (!url.trim()) {
+      updateStatus('Please enter a YouTube URL', 'error');
+      return;
+    }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      updateStatus('Not connected to server', 'error');
+      return;
+    }
+    updateStatus('Adding to queue...');
+    addLog('nodejs', `Adding to queue: ${url.trim()}`);
+    wsRef.current.send(JSON.stringify({
+      action: 'addToQueue',
+      url: url.trim(),
+    }));
+  }, [updateStatus, addLog]);
+
+  const removeFromQueue = useCallback((index: number) => {
+    wsRef.current?.send(JSON.stringify({
+      action: 'removeFromQueue',
+      index,
+    }));
+    addLog('nodejs', `Removing track at index ${index}`);
+  }, [addLog]);
+
+  const skip = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'skip' }));
+    updateStatus('Skipping...');
+    addLog('nodejs', 'Skip requested');
+  }, [updateStatus, addLog]);
+
+  const clearQueue = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'clearQueue' }));
+    updateStatus('Queue cleared');
+    addLog('nodejs', 'Queue cleared');
+  }, [updateStatus, addLog]);
+
   return {
     isConnected,
     debugMode,
@@ -275,11 +362,20 @@ export function useWebSocket(): UseWebSocketReturn {
     status,
     statusType,
     isPlaying,
+    currentUrl,
+    playbackTime,
     logs,
+    queue,
+    currentIndex,
+    nowPlaying,
     play,
     stop,
     pause,
     resume,
     clearLogs,
+    addToQueue,
+    removeFromQueue,
+    skip,
+    clearQueue,
   };
 }

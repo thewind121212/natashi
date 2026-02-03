@@ -22,6 +22,12 @@ func SetupRouter(api *API) *gin.Engine {
 		session.GET("/status", api.Status)
 	}
 
+	// Metadata endpoint (for queue)
+	r.GET("/metadata", api.Metadata)
+
+	// Playlist endpoint (extract all videos from playlist)
+	r.GET("/playlist", api.Playlist)
+
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

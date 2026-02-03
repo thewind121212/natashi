@@ -21,6 +21,29 @@ export interface StatusResponse {
   url?: string;
 }
 
+export interface MetadataResponse {
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail: string;
+  is_playlist: boolean;
+  error?: string;
+}
+
+export interface PlaylistEntry {
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail: string;
+}
+
+export interface PlaylistResponse {
+  url: string;
+  count: number;
+  entries: PlaylistEntry[];
+  error?: string;
+}
+
 export class ApiClient {
   private baseUrl: string;
 
@@ -68,5 +91,15 @@ export class ApiClient {
   async health(): Promise<{ status: string }> {
     const response = await fetch(`${this.baseUrl}/health`);
     return response.json() as Promise<{ status: string }>;
+  }
+
+  async getMetadata(url: string): Promise<MetadataResponse> {
+    const response = await fetch(`${this.baseUrl}/metadata?url=${encodeURIComponent(url)}`);
+    return response.json() as Promise<MetadataResponse>;
+  }
+
+  async getPlaylist(url: string): Promise<PlaylistResponse> {
+    const response = await fetch(`${this.baseUrl}/playlist?url=${encodeURIComponent(url)}`);
+    return response.json() as Promise<PlaylistResponse>;
   }
 }
