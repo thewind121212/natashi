@@ -100,11 +100,11 @@ sequenceDiagram
 |----|-----------|----------------|---------------|
 | c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/` (future) |
 | c3-102 | Voice Manager | @discordjs/voice | `node/src/` (future) |
-| c3-103 | Queue Manager | Playlist state | `node/src/` (future) |
+| c3-103 | Queue Manager | Playlist state, track navigation | `playground/src/queue-manager.ts` |
 | c3-104 | API Client | HTTP client to Go | `playground/src/api-client.ts` |
 | c3-105 | Socket Client | Unix socket receiver | `playground/src/socket-client.ts` |
 | c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
-| c3-107 | WebSocket Handler | Real-time events | `playground/src/websocket.ts` |
+| c3-107 | WebSocket Handler | Real-time events, queue sync | `playground/src/websocket.ts` |
 
 ### C3-2: Go Audio Application
 
@@ -135,6 +135,38 @@ sequenceDiagram
 | `pcm` | Playground debug | Raw PCM s16le → macOS speakers |
 | `opus` | Discord production | Opus frames → Discord voice UDP |
 
+## Playground Features
+
+The playground (`playground/client/`) is a React UI for testing the audio pipeline.
+
+### UI Components
+
+| Component | Description |
+|-----------|-------------|
+| **PlayerBar** | Spotify-style fixed bottom bar with album art, controls, progress |
+| **QueueList** | Collapsible queue showing current track context, expand/collapse animation |
+| **LogViewer** | Server logs with tabs (All/Go/Node.js) |
+
+### Queue Features
+
+- **YouTube Playlist Support**: Paste playlist URL to add all tracks
+- **Track Navigation**: Previous/Next buttons, click-to-play from queue
+- **State Sync**: Queue state persists across browser refresh (server-side state)
+- **Collapsible View**: Shows 3 tracks around current, expands with animation
+
+### WebSocket Actions
+
+| Action | Description |
+|--------|-------------|
+| `play` | Play URL (single video or playlist) |
+| `addToQueue` | Add URL to queue without playing |
+| `playFromQueue` | Jump to specific track in queue |
+| `skip` | Skip to next track |
+| `previous` | Go to previous track |
+| `clearQueue` | Clear all tracks and stop |
+| `pause` / `resume` | Pause/resume playback |
+| `stop` | Stop playback |
+
 ## Current State
 
 | Component | Status | Location |
@@ -145,6 +177,7 @@ sequenceDiagram
 | c3-204 Opus Encoder | Done | `internal/encoder/ffmpeg.go` |
 | c3-205 Jitter Buffer | TODO | `internal/buffer/` |
 | c3-206 Socket Server | Done | `internal/server/socket.go` |
+| c3-103 Queue Manager | Done | `playground/src/queue-manager.ts` |
 | c3-104 API Client | Done | `playground/src/api-client.ts` |
 | c3-105 Socket Client | Done | `playground/src/socket-client.ts` |
 | c3-106 Express Server | Done | `playground/src/server.ts` |
@@ -211,8 +244,17 @@ music-bot/
 │   │   ├── api-client.ts      # c3-104: Gin API client
 │   │   ├── socket-client.ts   # c3-105: Audio receiver
 │   │   ├── server.ts          # c3-106: Express server
-│   │   └── websocket.ts       # c3-107: Browser handler
+│   │   ├── websocket.ts       # c3-107: WebSocket handler
+│   │   └── queue-manager.ts   # c3-103: Queue/playlist manager
 │   └── client/                # React UI
+│       └── src/
+│           ├── App.tsx
+│           ├── components/
+│           │   ├── PlayerBar.tsx    # Spotify-style bottom player
+│           │   ├── QueueList.tsx    # Collapsible queue view
+│           │   └── LogViewer.tsx    # Server logs
+│           └── hooks/
+│               └── useWebSocket.ts  # WebSocket state hook
 ├── .c3/                       # Architecture docs (C4 model)
 └── Taskfile.yml
 ```

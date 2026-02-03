@@ -69,11 +69,11 @@ flowchart TB
 |----|-----------|----------------|---------------|
 | c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/commands/` (future) |
 | c3-102 | Voice Manager | Voice connections | `node/src/voice/` (future) |
-| c3-103 | Queue Manager | Playlist state | `node/src/queue/` (future) |
+| c3-103 | Queue Manager | Playlist state, track navigation | `playground/src/queue-manager.ts` |
 | c3-104 | API Client | HTTP client to Go API | `playground/src/api-client.ts` |
 | c3-105 | Socket Client | Audio stream receiver | `playground/src/socket-client.ts` |
 | c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
-| c3-107 | WebSocket Handler | Real-time browser events | `playground/src/websocket.ts` |
+| c3-107 | WebSocket Handler | Real-time browser events, queue sync | `playground/src/websocket.ts` |
 
 ## Component Interactions
 
@@ -117,16 +117,29 @@ flowchart LR
 ### Messages from Browser
 
 ```json
+// Playback control
 {"action": "play", "url": "https://youtube.com/..."}
 {"action": "stop"}
 {"action": "pause"}
 {"action": "resume"}
+
+// Queue management
+{"action": "addToQueue", "url": "https://youtube.com/..."}
+{"action": "removeFromQueue", "index": 0}
+{"action": "playFromQueue", "index": 2}
+{"action": "skip"}
+{"action": "previous"}
+{"action": "clearQueue"}
+{"action": "getQueue"}
 ```
 
 ### Messages to Browser
 
 ```json
-{"type": "state", "debugMode": true, "isPlaying": false}
+// Connection state (sent on connect)
+{"type": "state", "debugMode": true, "isPlaying": false, "isPaused": false, "queue": [], "currentIndex": -1, "nowPlaying": null}
+
+// Playback events
 {"type": "session", "session_id": "abc123"}
 {"type": "ready", "session_id": "abc123"}
 {"type": "progress", "bytes": 12345, "playback_secs": 10.5}
@@ -135,6 +148,13 @@ flowchart LR
 {"type": "resumed"}
 {"type": "stopped"}
 {"type": "error", "message": "..."}
+
+// Queue events
+{"type": "queueUpdated", "queue": [...], "currentIndex": 2, "nowPlaying": {...}}
+{"type": "nowPlaying", "nowPlaying": {"url": "...", "title": "...", "duration": 180, "thumbnail": "..."}}
+{"type": "queueFinished"}
+
+// Logs
 {"type": "log", "source": "go|nodejs", "message": "..."}
 ```
 
@@ -180,12 +200,19 @@ playground/src/
 ├── websocket.ts       # c3-107: WebSocket handler
 ├── api-client.ts      # c3-104: Go API client
 ├── socket-client.ts   # c3-105: Socket client
+├── queue-manager.ts   # c3-103: Queue manager
 └── audio-player.ts    # Debug audio output
 
 playground/client/src/
 ├── App.tsx            # React main component
+├── App.css            # Custom animations
+├── components/
+│   ├── PlayerBar.tsx  # Spotify-style bottom player bar
+│   ├── QueueList.tsx  # Collapsible queue with track list
+│   ├── LogViewer.tsx  # Server log viewer with tabs
+│   └── ui/            # Shadcn UI components
 └── hooks/
-    └── useWebSocket.ts  # React WebSocket hook
+    └── useWebSocket.ts  # React WebSocket state hook
 ```
 
 ## Communication with Go Application
