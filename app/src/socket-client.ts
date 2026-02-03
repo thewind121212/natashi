@@ -1,5 +1,6 @@
 import * as net from 'net';
 import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
@@ -18,6 +19,7 @@ export class SocketClient extends EventEmitter {
   private buffer = Buffer.alloc(0);
   private readingAudio = false;
   private audioLength = 0;
+  private audioStream: PassThrough | null = null;
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -131,5 +133,37 @@ export class SocketClient extends EventEmitter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  // Create a PassThrough stream for Discord audio playback
+  createAudioStream(): PassThrough {
+    // End previous stream if exists
+    if (this.audioStream) {
+      this.audioStream.end();
+    }
+    this.audioStream = new PassThrough();
+
+    // Pipe audio events to the stream
+    const audioHandler = (data: Buffer) => {
+      if (this.audioStream && !this.audioStream.destroyed) {
+        this.audioStream.push(data);
+      }
+    };
+    this.on('audio', audioHandler);
+
+    // Clean up when stream is destroyed
+    this.audioStream.on('close', () => {
+      this.off('audio', audioHandler);
+    });
+
+    return this.audioStream;
+  }
+
+  // End the current audio stream
+  endAudioStream(): void {
+    if (this.audioStream) {
+      this.audioStream.end();
+      this.audioStream = null;
+    }
   }
 }
