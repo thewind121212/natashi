@@ -21,29 +21,31 @@ ONE TASK = ONE ATOMIC CHANGE = ONE VERIFICATION = DONE ✅
 
 ```mermaid
 flowchart TB
-    subgraph System["Music Bot Architecture"]
-        subgraph C3_1["C3-1: Node.js Application"]
-            C101[c3-101 Discord Bot]
-            C102[c3-102 Voice Manager]
-            C103[c3-103 Queue Manager]
-            C104[c3-104 Socket Client]
-        end
-
-        subgraph C3_2["C3-2: Go Audio Application"]
-            C201[c3-201 Audio Processor]
-            C202[c3-202 Stream Extractor]
-            C203[c3-203 Opus Encoder]
-            C204[c3-204 Jitter Buffer]
-        end
+    subgraph Playground["Node.js Playground"]
+        WS[websocket.ts]
+        API_C[api-client.ts]
+        SOCK_C[socket-client.ts]
+        PLAYER[audio-player.ts]
     end
 
-    C101 --> C102 --> C104
-    C101 --> C103
-    C104 <--> C201
-    C201 --> C202 --> C203 --> C204
+    subgraph Go["Go Audio Server"]
+        API[api.go]
+        SESSION[session.go]
+        SOCKET[socket.go]
+        FFMPEG[ffmpeg.go]
+        YTDLP[youtube.go]
+    end
+
+    WS --> API_C -->|HTTP :8180| API
+    WS --> SOCK_C <-->|Unix Socket| SOCKET
+    SOCK_C --> PLAYER
+    API --> SESSION --> YTDLP --> FFMPEG --> SOCKET
 ```
 
-**C3 Documentation:** `.c3/` folder contains full architecture details.
+**Key Directories:**
+- Node.js: `playground/src/`
+- Go: `internal/server/`, `internal/encoder/`, `internal/platform/`
+- Automation: `Taskfile.yml` (`task run`, `task kill`)
 
 ---
 
@@ -82,10 +84,11 @@ When tasks span both layers, check if parallel execution is possible:
 
 **Stream Assignment:**
 
-| Stream | Layer | C3 Components | Directory |
-|--------|-------|---------------|-----------|
-| **Node.js Stream** | C3-1 Node.js | c3-101, c3-102, c3-103, c3-104 | `node/src/` |
-| **Go Stream** | C3-2 Go | c3-201, c3-202, c3-203, c3-204 | `go/internal/` |
+| Stream | Layer | Files | Directory |
+|--------|-------|-------|-----------|
+| **Node.js Stream** | Playground | websocket.ts, api-client.ts, socket-client.ts, audio-player.ts | `playground/src/` |
+| **Go Stream** | Audio Server | api.go, session.go, socket.go, ffmpeg.go, youtube.go | `internal/` |
+| **Web UI Stream** | Browser | index.html, app.js | `playground/public/` |
 | **Integration Stream** | Both | IPC protocol, E2E tests | Both |
 
 ---
@@ -274,13 +277,18 @@ flowchart LR
 
 **Node.js Execution:**
 1. Create/modify files in plan order
-2. Run: `cd node && npm run build`
+2. Run: `cd playground && npm run build`
 3. Fix only errors related to your changes
 
 **Go Execution:**
 1. Create/modify files in plan order
-2. Run: `cd go && go build ./...`
+2. Run: `go build ./cmd/playground/main.go`
 3. Fix only errors related to your changes
+
+**Full Test:**
+1. Run: `task run` (starts both servers)
+2. Open http://localhost:3000
+3. Test with YouTube URL
 
 ---
 
@@ -417,16 +425,16 @@ flowchart TB
 
 ## Audio Quality Checks (for Go tasks)
 
-When modifying c3-203 Opus Encoder or c3-204 Jitter Buffer:
+When modifying `internal/encoder/ffmpeg.go`:
 
 | Check | Required Value |
 |-------|----------------|
-| Sample Rate | 48000 Hz |
-| Channels | 2 (stereo) |
-| Frame Size | 20ms (960 samples) |
-| Bitrate | 128 kbps |
-| Jitter Buffer | 3-5 frames |
+| Sample Rate | 48000 Hz (`-ar 48000`) |
+| Channels | 2 stereo (`-ac 2`) |
+| Format | s16le PCM (`-f s16le`) |
+| Real-time | `-re` flag for streaming |
+| Low-latency | `-fflags nobuffer -flags low_delay` |
 
-Reference: `.c3/c3-2-go-audio/c3-203-opus-encoder/README.md`
+Reference: `internal/encoder/ffmpeg.go` buildArgs function
 
 ---

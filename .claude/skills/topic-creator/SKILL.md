@@ -19,33 +19,35 @@ This is **for developers**, not business stakeholders. Keep it tight, technical,
 
 ```mermaid
 flowchart TB
-    subgraph System["Music Bot Architecture"]
-        subgraph C3_1["C3-1: Node.js Application"]
-            C101[c3-101 Discord Bot]
-            C102[c3-102 Voice Manager]
-            C103[c3-103 Queue Manager]
-            C104[c3-104 API Client]
-            C105[c3-105 Socket Client]
+    subgraph System["Music Bot - Audio Test Playground"]
+        subgraph Playground["Node.js Playground (playground/)"]
+            WEB[Web UI]
+            WS[WebSocket Server]
+            API_C[API Client]
+            SOCK_C[Socket Client]
+            PLAYER[Audio Player ffplay]
         end
 
-        subgraph C3_2["C3-2: Go Audio Application :8180"]
-            C201[c3-201 Gin API Server]
-            C202[c3-202 Session Manager]
-            C203[c3-203 Stream Extractor]
-            C204[c3-204 Opus Encoder]
-            C205[c3-205 Jitter Buffer]
-            C206[c3-206 Socket Server]
+        subgraph Go["Go Audio Server (internal/)"]
+            API[Gin API :8180]
+            SESSION[Session Manager]
+            EXTRACT[Stream Extractor yt-dlp]
+            ENCODE[FFmpeg Encoder]
+            SOCKET[Socket Server]
         end
     end
 
-    C101 --> C102 --> C104
-    C101 --> C103
-    C104 -->|HTTP :8180| C201
-    C105 <-->|Unix Socket| C206
-    C201 --> C202 --> C203 --> C204 --> C205 --> C206
+    WEB -->|browser| WS
+    WS --> API_C -->|HTTP :8180| API
+    WS --> SOCK_C <-->|Unix Socket| SOCKET
+    SOCK_C --> PLAYER
+    API --> SESSION --> EXTRACT --> ENCODE --> SOCKET
 ```
 
-**C3 Documentation:** `.c3/` folder contains full architecture details.
+**Key files:**
+- Go: `internal/server/`, `internal/encoder/`, `internal/platform/youtube/`
+- Node.js: `playground/src/`
+- Web UI: `playground/public/`
 
 ---
 
@@ -97,11 +99,13 @@ flowchart LR
 | Smooth playback | c3-205 Jitter Buffer | C3-2 Go |
 
 3. **Scan repo for existing patterns:**
-   - `playground/src/` - Node.js backend (current)
-   - `playground/client/src/` - React frontend
-   - `internal/` - Go layer
+   - `playground/src/` - Node.js backend (websocket, api-client, socket-client, audio-player)
+   - `playground/public/` - Web UI (index.html, app.js)
+   - `internal/server/` - Go API + session + socket
+   - `internal/encoder/` - FFmpeg pipeline
+   - `internal/platform/youtube/` - yt-dlp extractor
    - `cmd/playground/` - Go entry point
-   - Find similar implementations
+   - `Taskfile.yml` - Task automation (run, kill, build)
 
 4. **Collect evidence links** (file paths + key snippets or line refs if available)
 

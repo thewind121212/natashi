@@ -19,38 +19,36 @@ This skill reviews implemented features by **comparing actual code against plann
 
 ```mermaid
 flowchart TB
-    subgraph Discord
+    subgraph Browser
         USER[User]
-        VOICE[Voice Channel]
+        WEBUI[Web UI]
     end
 
-    subgraph C3_1["C3-1: Node.js Application"]
-            CMD[Slash Commands]
-            QM[Queue Manager]
-            VM[Voice Manager]
-            SC[Socket Client]
-        end
+    subgraph Playground["Node.js Playground"]
+        WS[WebSocket Server]
+        API_C[API Client]
+        SOCK_C[Socket Client]
+        PLAYER[Audio Player]
+    end
 
-        subgraph IPC["Unix Sockets"]
-            SOCK1[/tmp/music.sock]
-            SOCK2[/tmp/music-audio.sock]
-        end
+    subgraph IPC["Communication"]
+        HTTP[HTTP :8180]
+        SOCKET[Unix Socket]
+    end
 
-        subgraph C3_2["C3-2: Go Audio Application"]
-            WP[Worker Pool]
-            YT[yt-dlp]
-            FF[FFmpeg]
-            OP[Opus Encoder]
-        end
+    subgraph Go["Go Audio Server"]
+        API[Gin API]
+        SESSION[Session Manager]
+        EXTRACT[yt-dlp]
+        ENCODE[FFmpeg]
+    end
 
-    USER -->|commands| CMD
-    CMD --> QM
-    CMD --> VM
-    SC <--> SOCK1
-    SC <--> SOCK2
-    SOCK1 <--> WP
-    SOCK2 <--> OP
-    VM --> VOICE
+    USER --> WEBUI --> WS
+    WS --> API_C --> HTTP --> API
+    WS --> SOCK_C --> SOCKET
+    SOCKET <--> ENCODE
+    API --> SESSION --> EXTRACT --> ENCODE
+    SOCK_C --> PLAYER
 ```
 
 ## Review Flow
@@ -94,71 +92,49 @@ docs/plans/adr-{YYYYMMDD}-{feature-name}/
 
 **Scan the project directories:**
 
-### Node.js Structure
+### Node.js Structure (playground/)
 
 ```mermaid
 flowchart TB
-    subgraph NodeJS["node/src/"]
+    subgraph NodeJS["playground/src/"]
         INDEX[index.ts]
+        SERVER[server.ts]
+        WEBSOCKET[websocket.ts]
+        API_CLIENT[api-client.ts]
+        SOCKET_CLIENT[socket-client.ts]
+        AUDIO_PLAYER[audio-player.ts]
+    end
 
-        subgraph Commands["commands/"]
-            PLAY[play.ts]
-            PAUSE[pause.ts]
-            RESUME[resume.ts]
-            STOP[stop.ts]
-            SKIP[skip.ts]
-            LIST[list.ts]
-        end
-
-        subgraph Voice["voice/"]
-            CONN[connection.ts]
-            PLAYER[player.ts]
-        end
-
-        subgraph Queue["queue/"]
-            QMGR[manager.ts]
-        end
-
-        subgraph Socket["socket/"]
-            CLIENT[client.ts]
-            SCMD[commands.ts]
-            AUDIO[audio.ts]
-        end
+    subgraph WebUI["playground/public/"]
+        HTML[index.html]
+        JS[app.js]
     end
 ```
 
-### Go Structure
+### Go Structure (internal/)
 
 ```mermaid
 flowchart TB
-    subgraph Go["go/"]
-        subgraph Cmd["cmd/"]
+    subgraph Go["Go Application"]
+        subgraph Cmd["cmd/playground/"]
             MAIN[main.go]
         end
 
-        subgraph Internal["internal/"]
-            subgraph Server["server/"]
-                SOCK[socket.go]
-                HANDLER[handler.go]
-            end
+        subgraph Server["internal/server/"]
+            API[api.go]
+            ROUTER[router.go]
+            SESSION[session.go]
+            SOCKET[socket.go]
+            TYPES[types.go]
+        end
 
-            subgraph Worker["worker/"]
-                POOL[pool.go]
-                SESSION[session.go]
-            end
+        subgraph Encoder["internal/encoder/"]
+            FFMPEG[ffmpeg.go]
+            ENC[encoder.go]
+        end
 
-            subgraph Extractor["extractor/"]
-                YTDLP[ytdlp.go]
-            end
-
-            subgraph Encoder["encoder/"]
-                FFMPEG[ffmpeg.go]
-                OPUS[opus.go]
-            end
-
-            subgraph Buffer["buffer/"]
-                JITTER[jitter.go]
-            end
+        subgraph Platform["internal/platform/"]
+            YOUTUBE[youtube/youtube.go]
         end
     end
 ```
@@ -294,32 +270,35 @@ flowchart TB
 
 ## Step 6: Verify Audio Quality Settings
 
-### Opus Encoding Requirements
+### PCM Streaming Requirements (Debug Mode)
 
 | Setting | Required | Check |
 |---------|----------|-------|
 | Sample Rate | 48000 Hz | FFmpeg `-ar 48000`? |
 | Channels | 2 (stereo) | FFmpeg `-ac 2`? |
-| Frame Size | 960 samples | 20ms at 48kHz? |
-| Bitrate | 128 kbps | Opus bitrate set? |
+| Format | s16le | FFmpeg `-f s16le`? |
+| Streaming | Real-time | FFmpeg `-re` flag? |
 
-### Jitter Buffer
+### Low-Latency Flags
 
 | Setting | Required | Check |
 |---------|----------|-------|
-| Buffer Size | 3-5 frames | 60-100ms buffer? |
-| Sequence Numbers | Present | Frames numbered? |
+| No buffer | `-fflags nobuffer` | Input not buffered? |
+| Low delay | `-flags low_delay` | Low latency mode? |
+| Fast probe | `-probesize 32` | Quick startup? |
+| No analysis | `-analyzeduration 0` | Skip analysis? |
 
 ### FFmpeg Command Validation
 
 ```mermaid
 flowchart LR
     subgraph FFmpeg["Required FFmpeg Flags"]
-        R1["-reconnect 1"]
-        R2["-reconnect_streamed 1"]
-        R3["-ar 48000"]
-        R4["-ac 2"]
-        R5["-f s16le"]
+        R1["-fflags nobuffer"]
+        R2["-flags low_delay"]
+        R3["-re"]
+        R4["-ar 48000"]
+        R5["-ac 2"]
+        R6["-f s16le"]
     end
 ```
 

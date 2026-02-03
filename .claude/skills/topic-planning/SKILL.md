@@ -21,32 +21,31 @@ This skill guides the **planning phase** before feature implementation for the D
 ```mermaid
 flowchart TB
     subgraph External["External"]
-        DISCORD[Discord API]
+        BROWSER[Browser]
         YOUTUBE[YouTube]
     end
 
-    subgraph C3_1["C3-1: Node.js Application"]
-        C101[Discord Bot]
-        C102[Voice Manager]
-        C104[API Client]
-        C105[Socket Client]
+    subgraph Playground["Node.js Playground"]
+        WS[WebSocket Server]
+        API_C[API Client]
+        SOCK_C[Socket Client]
+        PLAYER[Audio Player]
     end
 
-    subgraph C3_2["C3-2: Go Audio Application :8180"]
-        C201[Gin API]
-        C202[Session Manager]
-        C203[Stream Extractor]
-        C204[Opus Encoder]
-        C205[Jitter Buffer]
-        C206[Socket Server]
+    subgraph Go["Go Audio Server :8180"]
+        API[Gin API]
+        SESSION[Session Manager]
+        EXTRACT[Stream Extractor]
+        ENCODE[FFmpeg Encoder]
+        SOCKET[Socket Server]
     end
 
-    DISCORD <-->|Gateway| C101
-    C101 --> C102 --> C104
-    C104 -->|HTTP :8180| C201
-    C105 <-->|Unix Socket| C206
-    C201 --> C202 --> C203 -->|yt-dlp| YOUTUBE
-    C203 --> C204 --> C205 --> C206
+    BROWSER -->|WebSocket| WS
+    WS --> API_C -->|HTTP :8180| API
+    WS --> SOCK_C <-->|Unix Socket| SOCKET
+    SOCK_C --> PLAYER -->|ffplay| BROWSER
+    API --> SESSION --> EXTRACT -->|yt-dlp| YOUTUBE
+    EXTRACT --> ENCODE --> SOCKET
 ```
 
 ## Planning Flow
@@ -147,50 +146,49 @@ flowchart TB
 
 **Analyze impacts across:**
 
-### Node.js Layer
+### Node.js Layer (playground/)
 
 ```mermaid
 flowchart TB
     subgraph NodeJS["playground/src/"]
-        INDEX[index.ts]
-        SERVER[server.ts]
-        WEBSOCKET[websocket.ts]
-        API_CLIENT[api-client.ts]
-        SOCKET_CLIENT[socket-client.ts]
-        AUDIO_PLAYER[audio-player.ts]
+        INDEX[index.ts - entry point]
+        SERVER[server.ts - HTTP server]
+        WEBSOCKET[websocket.ts - browser connection]
+        API_CLIENT[api-client.ts - Go HTTP API]
+        SOCKET_CLIENT[socket-client.ts - Go audio socket]
+        AUDIO_PLAYER[audio-player.ts - ffplay wrapper]
     end
 
-    subgraph React["playground/client/src/"]
-        APP[App.tsx]
-        HOOKS[hooks/useWebSocket.ts]
+    subgraph WebUI["playground/public/"]
+        HTML[index.html]
+        JS[app.js]
     end
 ```
 
-### Go Layer
+### Go Layer (internal/)
 
 ```mermaid
 flowchart TB
     subgraph Go["Go Application"]
         subgraph Cmd["cmd/playground/"]
-            MAIN[main.go]
+            MAIN[main.go - entry point]
         end
 
-        subgraph Internal["internal/"]
-            subgraph Server["server/"]
-                API[api.go]
-                ROUTER[router.go]
-                SESSION[session.go]
-                SOCKET[socket.go]
-                TYPES[types.go]
-            end
+        subgraph Server["internal/server/"]
+            API[api.go - Gin HTTP API]
+            ROUTER[router.go - routes]
+            SESSION[session.go - playback state]
+            SOCKET[socket.go - audio streaming]
+            TYPES[types.go - Command/Event types]
+        end
 
-            subgraph Encoder["encoder/"]
-                FFMPEG[ffmpeg.go]
-            end
+        subgraph Encoder["internal/encoder/"]
+            FFMPEG[ffmpeg.go - real-time transcoding]
+            ENC[encoder.go - pipeline interface]
+        end
 
-            subgraph Platform["platform/"]
-                YOUTUBE[youtube/youtube.go]
-            end
+        subgraph Platform["internal/platform/"]
+            YOUTUBE[youtube/youtube.go - yt-dlp extraction]
         end
     end
 ```
