@@ -16,74 +16,109 @@ Key requirements:
 
 ## Decision
 
-Adopt C3 (Context-Container-Component) documentation with the following structure:
+Adopt C3 (Context-Container-Component) documentation based on the [C4 Model](https://c4model.com/) with the following structure:
 
 ```mermaid
 flowchart TB
     subgraph C3["C3 Architecture"]
-        C0[c3-0: Context<br/>System boundaries]
-        C1[c3-1: Container<br/>Docker container]
+        C0[C3-0: System Context<br/>Users + External Systems]
 
-        subgraph Components["c3-1XX: Components"]
-            NODE[Node.js Layer]
-            GO[Go Layer]
+        subgraph Containers["Containers (Running Applications)"]
+            C1[C3-1: Node.js Application<br/>Brain / Orchestrator]
+            C2[C3-2: Go Audio Application<br/>Audio Engine]
+        end
+
+        subgraph NodeComponents["C3-1XX: Node.js Components"]
+            N101[c3-101 Discord Bot]
+            N102[c3-102 Voice Manager]
+            N103[c3-103 Queue Manager]
+            N104[c3-104 API Client]
+            N105[c3-105 Socket Client]
+            N106[c3-106 Express Server]
+            N107[c3-107 WebSocket Handler]
+        end
+
+        subgraph GoComponents["C3-2XX: Go Components"]
+            G201[c3-201 Gin API Server]
+            G202[c3-202 Session Manager]
+            G203[c3-203 Stream Extractor]
+            G204[c3-204 Opus Encoder]
+            G205[c3-205 Jitter Buffer]
+            G206[c3-206 Socket Server]
         end
     end
 
-    C0 --> C1
-    C1 --> Components
+    C0 --> Containers
+    C1 --> NodeComponents
+    C2 --> GoComponents
 ```
 
 ### Component Mapping
 
-| ID | Component | Layer | Responsibility |
-|----|-----------|-------|----------------|
-| c3-101 | Discord Bot | Node.js | Slash commands, Discord.js |
-| c3-102 | Voice Manager | Node.js | Voice connections |
-| c3-103 | Queue Manager | Node.js | Playlist state |
-| c3-104 | Socket Client | Node.js | IPC to Go |
-| c3-105 | Audio Processor | Go | Worker pool |
-| c3-106 | Stream Extractor | Go | yt-dlp integration |
-| c3-107 | Opus Encoder | Go | FFmpeg + Opus |
-| c3-108 | Jitter Buffer | Go | Frame smoothing |
+#### C3-1: Node.js Application (Brain)
+
+| ID | Component | Responsibility |
+|----|-----------|----------------|
+| c3-101 | Discord Bot | Slash commands, Discord.js client |
+| c3-102 | Voice Manager | @discordjs/voice connections |
+| c3-103 | Queue Manager | Playlist state |
+| c3-104 | API Client | HTTP client to Go API |
+| c3-105 | Socket Client | Unix socket audio receiver |
+| c3-106 | Express Server | HTTP API for playground |
+| c3-107 | WebSocket Handler | Real-time browser events |
+
+#### C3-2: Go Audio Application (Audio Engine)
+
+| ID | Component | Responsibility |
+|----|-----------|----------------|
+| c3-201 | Gin API Server | HTTP control endpoints |
+| c3-202 | Session Manager | Session lifecycle, pause/resume |
+| c3-203 | Stream Extractor | yt-dlp integration |
+| c3-204 | Opus Encoder | FFmpeg + libopus pipeline |
+| c3-205 | Jitter Buffer | Smooth frame delivery |
+| c3-206 | Socket Server | Audio streaming to Node.js |
 
 ### Key Architecture Decisions
 
-1. **Hybrid Node.js + Go**
-   - Node.js: Better Discord ecosystem support
-   - Go: Better performance for audio processing
+1. **Two-Container Architecture**
+   - C3-1 Node.js: Discord ecosystem, state management, orchestration
+   - C3-2 Go: High-performance audio processing
 
-2. **Unix Socket IPC**
-   - Fastest IPC for single-container deployment
-   - Separate sockets for commands (JSON) and audio (binary)
+2. **Communication Pattern**
+   - Control Plane: HTTP REST (Node.js → Go :8180)
+   - Data Plane: Unix Socket (Go → Node.js)
 
 3. **Node.js as "Brain"**
    - All state management in Node.js
    - Go is stateless audio processor
+   - Node.js tells Go what to do
 
-4. **Worker Pool in Go**
-   - Bounded concurrency (60 workers max)
-   - One worker per voice channel
+4. **Session-based Concurrency in Go**
+   - One goroutine per active session
+   - Bounded by resource limits
+   - Clean lifecycle management
 
 ## Consequences
 
 ### Positive
 - Clear separation of concerns
-- Each layer uses optimal technology
-- Scalable architecture
-- Living documentation
+- Each container uses optimal technology
+- Scalable architecture (can scale containers independently)
+- Living documentation with C4 model
 
 ### Negative
 - Two languages to maintain
-- IPC complexity
+- IPC complexity between containers
 - Documentation maintenance overhead
 
 ### Risks
-- Documentation drift
+- Documentation drift (mitigated by CI checks)
 - IPC protocol changes need coordination
 
 ## References
 
-- [Container Overview](../c3-1-container/README.md)
+- [C4 Model](https://c4model.com/)
+- [C3-1: Node.js Application](../c3-1-nodejs/README.md)
+- [C3-2: Go Audio Application](../c3-2-go-audio/README.md)
 - [Discord.js Voice Guide](https://discordjs.guide/voice/)
 - [Lavalink Protocol](https://github.com/lavalink-devs/Lavalink)

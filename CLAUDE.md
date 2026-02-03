@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-Discord music bot with **Lavalink-quality audio streaming**. Hybrid Node.js + Go architecture.
+Discord music bot with **Lavalink-quality audio streaming**. Hybrid Node.js + Go architecture based on the [C4 Model](https://c4model.com/).
 
 **Goal**: Stream YouTube audio to Discord voice channels with:
 - No lagging
@@ -12,18 +12,22 @@ Discord music bot with **Lavalink-quality audio streaming**. Hybrid Node.js + Go
 
 ## Architecture (C3 Model)
 
+> C3 = Context-Container-Component (first 3 levels of C4)
+
 ```mermaid
 flowchart TB
     subgraph C3_0["C3-0: Music Bot System"]
-        subgraph C3_1["C3-1: Node.js Application"]
+        subgraph C3_1["C3-1: Node.js Application :3000<br/>(Brain - Orchestrator)"]
             c3_101[c3-101 Discord Bot]
             c3_102[c3-102 Voice Manager]
             c3_103[c3-103 Queue Manager]
             c3_104[c3-104 API Client]
             c3_105[c3-105 Socket Client]
+            c3_106[c3-106 Express Server]
+            c3_107[c3-107 WebSocket Handler]
         end
 
-        subgraph C3_2["C3-2: Go Audio Application"]
+        subgraph C3_2["C3-2: Go Audio Application :8180<br/>(Audio Engine)"]
             c3_201[c3-201 Gin API Server]
             c3_202[c3-202 Session Manager]
             c3_203[c3-203 Stream Extractor]
@@ -33,13 +37,22 @@ flowchart TB
         end
     end
 
-    c3_104 -->|HTTP :8180| c3_201
-    c3_105 <-->|Unix Socket| c3_206
+    c3_104 -->|"Control: HTTP :8180"| c3_201
+    c3_206 -->|"Data: Unix Socket"| c3_105
     c3_201 --> c3_202
     c3_202 --> c3_203 --> c3_204 --> c3_205 --> c3_206
 ```
 
-## Audio Pipeline (Format Option)
+### Communication Pattern
+
+| Channel | Direction | What | Protocol |
+|---------|-----------|------|----------|
+| **Control Plane** | Node.js → Go | Commands (play, stop, pause, resume) | HTTP REST :8180 |
+| **Data Plane** | Go → Node.js | Audio chunks + events | Unix Socket |
+
+> **Node.js is the brain**: It tells Go what to do. Go processes audio and streams it back.
+
+## Audio Pipeline
 
 ```mermaid
 flowchart LR
@@ -79,11 +92,36 @@ sequenceDiagram
     Node-->>Client: Audio (speaker/Discord)
 ```
 
+## Components
+
+### C3-1: Node.js Application
+
+| ID | Component | Responsibility | Code Location |
+|----|-----------|----------------|---------------|
+| c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/` (future) |
+| c3-102 | Voice Manager | @discordjs/voice | `node/src/` (future) |
+| c3-103 | Queue Manager | Playlist state | `node/src/` (future) |
+| c3-104 | API Client | HTTP client to Go | `playground/src/api-client.ts` |
+| c3-105 | Socket Client | Unix socket receiver | `playground/src/socket-client.ts` |
+| c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
+| c3-107 | WebSocket Handler | Real-time events | `playground/src/websocket.ts` |
+
+### C3-2: Go Audio Application
+
+| ID | Component | Responsibility | Code Location |
+|----|-----------|----------------|---------------|
+| c3-201 | Gin API Server | HTTP control endpoints | `internal/server/api.go` |
+| c3-202 | Session Manager | Session lifecycle | `internal/server/session.go` |
+| c3-203 | Stream Extractor | yt-dlp integration | `internal/platform/youtube/` |
+| c3-204 | Opus Encoder | FFmpeg + libopus | `internal/encoder/ffmpeg.go` |
+| c3-205 | Jitter Buffer | Smooth frame delivery | `internal/buffer/` (TODO) |
+| c3-206 | Socket Server | Audio to Node.js | `internal/server/socket.go` |
+
 ## API Endpoints (Gin :8180)
 
 | Endpoint | Method | Body | Description |
 |----------|--------|------|-------------|
-| `/session/:id/play` | POST | `{url, format}` | Start playback (format: pcm/opus/webm) |
+| `/session/:id/play` | POST | `{url, format}` | Start playback (format: pcm/opus) |
 | `/session/:id/stop` | POST | - | Stop & kill FFmpeg |
 | `/session/:id/pause` | POST | - | Pause (FFmpeg keeps running) |
 | `/session/:id/resume` | POST | - | Resume streaming |
@@ -96,29 +134,31 @@ sequenceDiagram
 |--------|----------|--------|
 | `pcm` | Playground debug | Raw PCM s16le → macOS speakers |
 | `opus` | Discord production | Opus frames → Discord voice UDP |
-| `webm` | Browser (future) | WebM container |
 
 ## Current State
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| Gin API Server | ✅ Done | `internal/server/api.go` |
-| Session Manager | ✅ Done | `internal/server/session.go` |
-| Stream Extractor | ✅ Done | `internal/platform/youtube/` |
-| FFmpeg Pipeline | ✅ Done | `internal/encoder/ffmpeg.go` |
-| Socket Server | ✅ Done | `internal/server/socket.go` |
-| Node.js Gateway | ✅ Done | `playground/src/` |
-| React Playground | ✅ Done | `playground/client/` |
+| c3-201 Gin API Server | Done | `internal/server/api.go` |
+| c3-202 Session Manager | Done | `internal/server/session.go` |
+| c3-203 Stream Extractor | Done | `internal/platform/youtube/` |
+| c3-204 Opus Encoder | Done | `internal/encoder/ffmpeg.go` |
+| c3-205 Jitter Buffer | TODO | `internal/buffer/` |
+| c3-206 Socket Server | Done | `internal/server/socket.go` |
+| c3-104 API Client | Done | `playground/src/api-client.ts` |
+| c3-105 Socket Client | Done | `playground/src/socket-client.ts` |
+| c3-106 Express Server | Done | `playground/src/server.ts` |
+| c3-107 WebSocket Handler | Done | `playground/src/websocket.ts` |
 
 ### TODO (for Lavalink quality)
 
 | Component | Priority | Description |
 |-----------|----------|-------------|
-| **Jitter Buffer** | HIGH | Smooth frame delivery (3-5 frames) |
+| **c3-205 Jitter Buffer** | HIGH | Smooth frame delivery (3-5 frames) |
 | **Worker Pool** | HIGH | Concurrent channel support (60+) |
 | **Opus Tuning** | HIGH | Optimize encoding settings |
-| Discord Bot | MEDIUM | discord.js integration |
-| Voice Manager | MEDIUM | @discordjs/voice |
+| c3-101 Discord Bot | MEDIUM | discord.js integration |
+| c3-102 Voice Manager | MEDIUM | @discordjs/voice |
 
 ## Audio Quality Specs
 
@@ -154,25 +194,26 @@ task kill
 ## Directory Structure
 
 ```
-natashi/
+music-bot/
 ├── cmd/playground/main.go     # Entry point
 ├── internal/
 │   ├── server/
-│   │   ├── api.go             # Gin handlers
-│   │   ├── router.go          # Gin routes
-│   │   ├── session.go         # Session manager
-│   │   └── socket.go          # Socket server
+│   │   ├── api.go             # c3-201: Gin handlers
+│   │   ├── router.go          # c3-201: Gin routes
+│   │   ├── session.go         # c3-202: Session manager
+│   │   └── socket.go          # c3-206: Socket server
 │   ├── encoder/
-│   │   └── ffmpeg.go          # FFmpeg + format options
-│   ├── buffer/                # Jitter buffer (TODO)
-│   └── platform/youtube/      # yt-dlp extractor
+│   │   └── ffmpeg.go          # c3-204: FFmpeg + format options
+│   ├── buffer/                # c3-205: Jitter buffer (TODO)
+│   └── platform/youtube/      # c3-203: yt-dlp extractor
 ├── playground/
 │   ├── src/                   # Node.js gateway
-│   │   ├── api-client.ts      # Gin API client
-│   │   ├── socket-client.ts   # Audio receiver
-│   │   └── websocket.ts       # Browser handler
+│   │   ├── api-client.ts      # c3-104: Gin API client
+│   │   ├── socket-client.ts   # c3-105: Audio receiver
+│   │   ├── server.ts          # c3-106: Express server
+│   │   └── websocket.ts       # c3-107: Browser handler
 │   └── client/                # React UI
-├── .c3/                       # Architecture docs
+├── .c3/                       # Architecture docs (C4 model)
 └── Taskfile.yml
 ```
 
@@ -187,6 +228,7 @@ natashi/
 
 | Path | What |
 |------|------|
-| `.c3/README.md` | C3 Architecture |
-| `.c3/c3-2-go-audio/` | Go components |
+| `.c3/README.md` | C3 Architecture (C4 model) |
+| `.c3/c3-1-nodejs/` | Node.js container docs |
+| `.c3/c3-2-go-audio/` | Go container docs |
 | `docs/plans/` | Implementation plans |

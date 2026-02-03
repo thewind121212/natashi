@@ -1,5 +1,7 @@
 # C3-1: Node.js Application (Container)
 
+> Part of the [C3 Architecture](./../README.md) based on the [C4 Model](https://c4model.com/)
+
 ## What is a Container? (C4 Definition)
 
 A **Container** is an application or data store - something that needs to be **running** for the system to work. It represents a runtime boundary around code being executed.
@@ -8,14 +10,14 @@ A **Container** is an application or data store - something that needs to be **r
 
 ## Overview
 
-The Node.js Application is the **gateway** of the Music Bot system. It handles browser/Discord interactions, proxies control commands to Go, and relays audio events back to clients.
+The Node.js Application is the **brain/orchestrator** of the Music Bot system. It handles browser/Discord interactions, sends control commands to Go, and relays audio events back to clients.
 
 | Aspect | Value |
 |--------|-------|
 | **Runtime** | Node.js 20 LTS |
-| **Role** | Gateway, Discord integration, HTTP/WebSocket server |
+| **Role** | Gateway, Discord integration, state management |
 | **HTTP Server** | Express on port 3000 |
-| **Code Location** | `playground/src/` (current), `node/src/` (Discord) |
+| **Code Location** | `playground/src/` (current), `node/src/` (Discord - future) |
 
 ## Container Diagram
 
@@ -52,7 +54,7 @@ flowchart TB
     c3_107 <--> c3_105
 ```
 
-### Communication Pattern
+## Communication Pattern
 
 | Channel | Direction | What | Protocol |
 |---------|-----------|------|----------|
@@ -167,6 +169,7 @@ sequenceDiagram
 | Express | 4.x | HTTP server |
 | ws | 8.x | WebSocket |
 | discord.js | v14 | Discord API (future) |
+| @discordjs/voice | latest | Voice connections (future) |
 
 ## Directory Structure
 
@@ -189,7 +192,7 @@ playground/client/src/
 
 ### Control Plane (HTTP)
 
-Node.js proxies control commands to Go API:
+Node.js sends control commands to Go API:
 
 ```mermaid
 flowchart LR
@@ -218,5 +221,5 @@ flowchart LR
 ## See Also
 
 - [C3-2: Go Audio Application](../c3-2-go-audio/README.md) - Audio processing container
-- [C3-0: Context](../c3-0-context/README.md) - System context
+- [C3-0: System Context](../c3-0-context/README.md) - System context
 - [Components Overview](./COMPONENTS.md) - Detailed component documentation

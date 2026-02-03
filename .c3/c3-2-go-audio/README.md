@@ -1,5 +1,7 @@
 # C3-2: Go Audio Application (Container)
 
+> Part of the [C3 Architecture](./../README.md) based on the [C4 Model](https://c4model.com/)
+
 ## What is a Container? (C4 Definition)
 
 A **Container** is an application or data store - something that needs to be **running** for the system to work. It represents a runtime boundary around code being executed.
@@ -8,7 +10,7 @@ A **Container** is an application or data store - something that needs to be **r
 
 ## Overview
 
-The Go Audio Application is the **audio processor** of the Music Bot system. It handles stream extraction, audio encoding, and session management with high performance and low latency.
+The Go Audio Application is the **audio engine** of the Music Bot system. It handles stream extraction, audio encoding, and session management with high performance and low latency.
 
 | Aspect | Value |
 |--------|-------|
@@ -26,27 +28,38 @@ flowchart TB
         YOUTUBE[YouTube]
     end
 
-    subgraph C3_1["C3-1: Node.js Application"]
-        API_CLIENT[API Client]
-        SOCKET_CLIENT[Socket Client]
+    subgraph C3_1["C3-1: Node.js Application<br/>(Brain - Orchestrator)"]
+        API_CLIENT[c3-104<br/>API Client]
+        SOCKET_CLIENT[c3-105<br/>Socket Client]
     end
 
-    subgraph C3_2["C3-2: Go Audio Application"]
-        c3_201[c3-201<br/>Gin API Server<br/>:8180]
+    subgraph C3_2["C3-2: Go Audio Application :8180<br/>(Audio Engine)"]
+        c3_201[c3-201<br/>Gin API Server]
         c3_202[c3-202<br/>Session Manager]
         c3_203[c3-203<br/>Stream Extractor]
-        c3_204[c3-204<br/>FFmpeg Encoder]
-        c3_205[c3-205<br/>Socket Server]
+        c3_204[c3-204<br/>Opus Encoder]
+        c3_205[c3-205<br/>Jitter Buffer]
+        c3_206[c3-206<br/>Socket Server]
     end
 
-    API_CLIENT -->|HTTP| c3_201
+    API_CLIENT -->|"Control: HTTP :8180"| c3_201
     c3_201 --> c3_202
     c3_202 --> c3_203
     c3_203 -->|yt-dlp| YOUTUBE
     c3_203 --> c3_204
     c3_204 --> c3_205
-    c3_205 <-->|Unix Socket| SOCKET_CLIENT
+    c3_205 --> c3_206
+    c3_206 -->|"Data: Unix Socket"| SOCKET_CLIENT
 ```
+
+## Communication Pattern
+
+| Channel | Direction | What | Protocol |
+|---------|-----------|------|----------|
+| **Control Plane** | Node.js → Go | Commands (play, stop, pause, resume) | HTTP REST :8180 |
+| **Data Plane** | Go → Node.js | Audio chunks + events (ready, progress, finished) | Unix Socket |
+
+> **Go is the audio engine**: Node.js tells Go what to do. Go processes audio and streams it back.
 
 ## Components
 
@@ -55,8 +68,9 @@ flowchart TB
 | c3-201 | Gin API Server | HTTP control endpoints | `internal/server/api.go`, `router.go` |
 | c3-202 | Session Manager | Session lifecycle, pause/resume | `internal/server/session.go` |
 | c3-203 | Stream Extractor | yt-dlp integration | `internal/platform/youtube/` |
-| c3-204 | FFmpeg Encoder | Audio decoding/encoding pipeline | `internal/encoder/ffmpeg.go` |
-| c3-205 | Socket Server | Audio streaming to Node.js | `internal/server/socket.go` |
+| c3-204 | Opus Encoder | FFmpeg + libopus pipeline | `internal/encoder/ffmpeg.go` |
+| c3-205 | Jitter Buffer | Smooth frame delivery (3-5 frames) | `internal/buffer/` (TODO) |
+| c3-206 | Socket Server | Audio streaming to Node.js | `internal/server/socket.go` |
 
 ## Component Interactions
 
@@ -65,14 +79,16 @@ flowchart LR
     c3_201[c3-201<br/>Gin API]
     c3_202[c3-202<br/>Session Manager]
     c3_203[c3-203<br/>Stream Extractor]
-    c3_204[c3-204<br/>FFmpeg Encoder]
-    c3_205[c3-205<br/>Socket Server]
+    c3_204[c3-204<br/>Opus Encoder]
+    c3_205[c3-205<br/>Jitter Buffer]
+    c3_206[c3-206<br/>Socket Server]
 
     c3_201 -->|"StartPlayback()"| c3_202
     c3_202 -->|"ExtractStreamURL()"| c3_203
     c3_203 -->|"streamUrl"| c3_204
-    c3_204 -->|"audioChunks"| c3_205
-    c3_205 -->|"events"| c3_202
+    c3_204 -->|"opusFrames"| c3_205
+    c3_205 -->|"bufferedFrames"| c3_206
+    c3_206 -->|"events"| c3_202
 ```
 
 ## API Endpoints (c3-201)
@@ -115,7 +131,7 @@ stateDiagram-v2
     Stopped --> [*]
 ```
 
-## Audio Pipeline (c3-203, c3-204)
+## Audio Pipeline (c3-203, c3-204, c3-205)
 
 ```mermaid
 flowchart LR
@@ -123,30 +139,36 @@ flowchart LR
         URL[YouTube URL]
     end
 
-    subgraph c3_203["c3-203 Extractor"]
+    subgraph c3_203["c3-203 Stream Extractor"]
         YTDLP[yt-dlp]
         STREAM[Stream URL]
     end
 
-    subgraph c3_204["c3-204 FFmpeg"]
-        DECODE[Decode]
+    subgraph c3_204["c3-204 Opus Encoder"]
+        DECODE[FFmpeg Decode]
         RESAMPLE[Resample 48kHz]
         ENCODE[Encode PCM/Opus]
     end
 
-    subgraph Output["Output"]
-        CHUNKS[Audio Chunks]
+    subgraph c3_205["c3-205 Jitter Buffer"]
+        BUFFER[Ring Buffer]
+        TIMING[20ms Timing]
     end
 
-    URL --> YTDLP --> STREAM --> DECODE --> RESAMPLE --> ENCODE --> CHUNKS
+    subgraph c3_206["c3-206 Socket Server"]
+        OUTPUT[Unix Socket]
+    end
+
+    URL --> YTDLP --> STREAM --> DECODE --> RESAMPLE --> ENCODE --> BUFFER --> TIMING --> OUTPUT
 ```
 
-## Socket Protocol (c3-205)
+## Socket Protocol (c3-206)
 
 ### Events (JSON, newline-delimited)
 
 ```json
 {"type": "ready", "session_id": "abc123"}
+{"type": "progress", "session_id": "abc123", "bytes": 12345, "playback_secs": 10.5}
 {"type": "finished", "session_id": "abc123"}
 {"type": "error", "session_id": "abc123", "message": "..."}
 ```
@@ -193,6 +215,7 @@ flowchart TB
 | Gin | latest | HTTP framework |
 | yt-dlp | latest | Stream extraction |
 | FFmpeg | latest | Audio processing |
+| libopus | latest | Opus encoding |
 
 ## Directory Structure
 
@@ -202,13 +225,15 @@ internal/
 │   ├── api.go           # c3-201: Gin handlers
 │   ├── router.go        # c3-201: Gin routes
 │   ├── session.go       # c3-202: Session manager
-│   ├── socket.go        # c3-205: Socket server
+│   ├── socket.go        # c3-206: Socket server
 │   └── types.go         # Protocol types
 ├── encoder/
 │   ├── ffmpeg.go        # c3-204: FFmpeg pipeline
 │   └── types.go         # Format definitions
+├── buffer/              # c3-205: Jitter buffer (TODO)
+│   └── jitter.go
 └── platform/
-    ├── platform.go      # c3-203: Registry
+    ├── platform.go      # c3-203: Platform registry
     └── youtube/
         └── youtube.go   # c3-203: yt-dlp wrapper
 
@@ -222,8 +247,9 @@ cmd/playground/
 |---------|-------|-----------|
 | Sample Rate | 48000 Hz | Discord native rate |
 | Channels | 2 (stereo) | Full quality |
-| Frame Size | 4096 bytes | Efficient chunking |
-| Format | PCM (s16le) | Playground debug |
+| Frame Size | 960 samples (20ms) | Discord requirement |
+| Bitrate | 128 kbps VBR | Good quality |
+| Jitter Buffer | 3-5 frames (60-100ms) | Smooth delivery |
 
 ## Environment Variables
 
@@ -234,5 +260,5 @@ cmd/playground/
 ## See Also
 
 - [C3-1: Node.js Application](../c3-1-nodejs/README.md) - Gateway container
-- [C3-0: Context](../c3-0-context/README.md) - System context
+- [C3-0: System Context](../c3-0-context/README.md) - System context
 - [Components Overview](./COMPONENTS.md) - Detailed component documentation
