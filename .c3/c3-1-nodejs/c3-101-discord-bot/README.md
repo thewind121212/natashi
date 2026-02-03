@@ -81,14 +81,10 @@ flowchart LR
 ## Directory Structure
 
 ```
-node/src/commands/
+app/src/commands/
 ├── index.ts          # Command registration
 ├── play.ts           # /play command handler
-├── pause.ts          # /pause command handler
-├── resume.ts         # /resume command handler
-├── stop.ts           # /stop command handler
-├── skip.ts           # /skip command handler
-└── list.ts           # /list command handler
+└── stop.ts           # /stop command handler
 ```
 
 ## Dependencies

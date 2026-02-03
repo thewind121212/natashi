@@ -14,9 +14,9 @@ A **Component** is a grouping of related functionality encapsulated behind a wel
 
 | ID | Component | Responsibility | Status |
 |----|-----------|----------------|--------|
-| [c3-101](./c3-101-discord-bot/README.md) | Discord Bot | Slash commands, Discord.js client | Future |
-| [c3-102](./c3-102-voice-manager/README.md) | Voice Manager | Voice connections, @discordjs/voice | Future |
-| [c3-103](./c3-103-queue-manager/README.md) | Queue Manager | Playlist state, track queue | Future |
+| [c3-101](./c3-101-discord-bot/README.md) | Discord Bot | Slash commands, Discord.js client | Done |
+| [c3-102](./c3-102-voice-manager/README.md) | Voice Manager | Voice connections, @discordjs/voice | Done |
+| [c3-103](./c3-103-queue-manager/README.md) | Queue Manager | Playlist state, track queue | Done |
 | c3-104 | API Client | HTTP client to Go API :8180 | Done |
 | c3-105 | Socket Client | Unix socket audio receiver | Done |
 | c3-106 | Express Server | HTTP API for playground | Done |
@@ -172,10 +172,10 @@ type OutboundMessage =
 
 | Component | Code Location | Status |
 |-----------|---------------|--------|
-| c3-101 | `node/src/commands/` | Future |
-| c3-102 | `node/src/voice/` | Future |
-| c3-103 | `node/src/queue/` | Future |
-| c3-104 | `playground/src/api-client.ts` | Done |
-| c3-105 | `playground/src/socket-client.ts` | Done |
-| c3-106 | `playground/src/server.ts` | Done |
-| c3-107 | `playground/src/websocket.ts` | Done |
+| c3-101 | `app/src/commands/` | Done |
+| c3-102 | `app/src/voice/` | Done |
+| c3-103 | `app/src/queue-manager.ts` | Done |
+| c3-104 | `app/src/api-client.ts` | Done |
+| c3-105 | `app/src/socket-client.ts` | Done |
+| c3-106 | `app/src/server.ts` | Done |
+| c3-107 | `app/src/websocket.ts` | Done |

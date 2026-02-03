@@ -68,10 +68,8 @@ stateDiagram-v2
 ## Directory Structure
 
 ```
-node/src/voice/
-├── connection.ts     # VoiceConnection wrapper
-├── player.ts         # AudioPlayer wrapper
-└── index.ts          # Voice manager exports
+app/src/voice/
+└── manager.ts        # Voice manager
 ```
 
 ## Dependencies

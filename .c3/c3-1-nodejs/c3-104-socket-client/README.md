@@ -91,11 +91,8 @@ flowchart LR
 ## Directory Structure
 
 ```
-node/src/socket/
-├── client.ts         # Socket client main class
-├── commands.ts       # Command sending utilities
-├── audio.ts          # Audio frame handler
-└── index.ts          # Socket exports
+app/src/
+└── socket-client.ts  # Socket client
 ```
 
 ## Dependencies

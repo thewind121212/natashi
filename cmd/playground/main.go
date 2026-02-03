@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"music-bot/internal/platform/youtube"
 	"music-bot/internal/server"
 	"music-bot/pkg/deps"
 )
@@ -26,6 +27,9 @@ func main() {
 	if err := checker.CheckAndPrint(); err != nil {
 		os.Exit(1)
 	}
+
+	// Load YouTube config from environment
+	youtube.LoadConfigFromEnv()
 
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())

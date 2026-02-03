@@ -127,13 +127,13 @@ sequenceDiagram
 
 | ID | Component | Responsibility | Code Location |
 |----|-----------|----------------|---------------|
-| c3-101 | Discord Bot | Slash commands, Discord.js client | `node/src/commands/` (future) |
-| c3-102 | Voice Manager | Voice connections, @discordjs/voice | `node/src/voice/` (future) |
-| c3-103 | Queue Manager | Playlist state, track navigation | `playground/src/queue-manager.ts` |
-| c3-104 | API Client | HTTP client to Go API :8180 | `playground/src/api-client.ts` |
-| c3-105 | Socket Client | Unix socket audio receiver | `playground/src/socket-client.ts` |
-| c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
-| c3-107 | WebSocket Handler | Real-time events, queue sync | `playground/src/websocket.ts` |
+| c3-101 | Discord Bot | Slash commands, Discord.js client | `app/src/commands/` |
+| c3-102 | Voice Manager | Voice connections, @discordjs/voice | `app/src/voice/` |
+| c3-103 | Queue Manager | Playlist state, track navigation | `app/src/queue-manager.ts` |
+| c3-104 | API Client | HTTP client to Go API :8180 | `app/src/api-client.ts` |
+| c3-105 | Socket Client | Unix socket audio receiver | `app/src/socket-client.ts` |
+| c3-106 | Express Server | HTTP API for browser | `app/src/server.ts` |
+| c3-107 | WebSocket Handler | Real-time events, queue sync | `app/src/websocket.ts` |
 
 ### C3-2: Go Audio Application
 

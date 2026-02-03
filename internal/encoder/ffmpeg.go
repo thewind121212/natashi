@@ -21,7 +21,7 @@ type FFmpegPipeline struct {
 func NewFFmpegPipeline(config Config) *FFmpegPipeline {
 	return &FFmpegPipeline{
 		config: config,
-		output: make(chan []byte, 100),
+		output: make(chan []byte, 500), // Larger buffer for smoother streaming
 	}
 }
 
@@ -123,20 +123,15 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 	sampleRate := fmt.Sprintf("%d", p.config.SampleRate)
 	channels := fmt.Sprintf("%d", p.config.Channels)
 
-	// Base input args with real-time streaming (like Lavalink)
+	// Base input args - buffer ahead for smooth playback
 	args := []string{
-		// Low-latency input flags (MUST be before -i)
-		"-fflags", "nobuffer",          // disable input buffering
-		"-flags", "low_delay",          // enable low delay mode
-		"-probesize", "32",             // minimal probe size for faster start
-		"-analyzeduration", "0",        // skip duration analysis
-		// Reconnect support
+		// Reconnect support for network streams
 		"-reconnect", "1",
 		"-reconnect_streamed", "1",
 		"-reconnect_delay_max", "5",
-		// CRITICAL: Read at real-time speed, not max speed
-		"-re",                          // real-time input (stream, don't download all)
+		// Input
 		"-i", streamURL,
+		// Audio processing
 		"-af", volume,
 		"-ar", sampleRate,
 		"-ac", channels,
@@ -151,10 +146,14 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 			"pipe:1",
 		)
 	case FormatOpus:
-		// Opus encoded frames - for Discord voice UDP
+		// Opus encoded for Discord - OGG container with optimal settings
 		args = append(args,
 			"-c:a", "libopus",
 			"-b:a", fmt.Sprintf("%d", p.config.Bitrate),
+			"-vbr", "on",                // Variable bitrate for better quality
+			"-compression_level", "10",  // Max compression quality
+			"-frame_duration", "20",     // 20ms frames (Discord standard)
+			"-application", "audio",     // Optimize for music
 			"-f", "opus",
 			"pipe:1",
 		)
@@ -168,7 +167,7 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	defer close(p.output)
 	defer p.stdout.Close()
 
-	buf := make([]byte, 4096)
+	buf := make([]byte, 16384) // Larger buffer for smoother streaming
 	totalBytes := 0
 	chunkCount := 0
 

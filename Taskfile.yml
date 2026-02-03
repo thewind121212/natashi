@@ -9,22 +9,6 @@ tasks:
     cmds:
       - task --list
 
-  run:
-    desc: Start all servers (Go + Node.js + Vite) - no audio output
-    cmds:
-      - task: kill
-      - |
-        echo "=== Audio Playground ==="
-        echo ""
-        echo "Go:      http://localhost:8180"
-        echo "Node.js: http://localhost:3000"
-        echo "Vite:    http://localhost:5173"
-        echo ""
-        echo "Press Ctrl+C to stop all servers"
-        echo "=========================================="
-        echo ""
-      - npx concurrently --kill-others --names "Go,Node,Vite" --prefix-colors "cyan,green,magenta" --prefix "[{name}]" "go run cmd/playground/main.go" "cd app && npm run dev" "cd playground && npx vite --clearScreen false"
-
   run:debug:
     desc: Start all servers with DEBUG mode (audio plays to macOS speakers)
     cmds:
@@ -40,10 +24,15 @@ tasks:
         echo "Press Ctrl+C to stop all servers"
         echo "=========================================="
         echo ""
-      - npx concurrently --kill-others --names "Go,Node,Vite" --prefix-colors "cyan,green,magenta" --prefix "[{name}]" "go run cmd/playground/main.go" "cd app && DEBUG_AUDIO=1 npm run dev" "cd playground && npx vite --clearScreen false"
+      - |
+        # Load env vars from app/.env for Go server
+        set -a
+        [ -f app/.env ] && source app/.env
+        set +a
+        npx concurrently --kill-others --names "Go,Node,Vite" --prefix-colors "cyan,green,magenta" --prefix "[{name}]" "go run cmd/playground/main.go" "cd app && DEBUG_AUDIO=1 npm run dev" "cd playground && npx vite --clearScreen false"
 
   run:bot:
-    desc: Start Go + Node.js with Discord bot (requires BOT_TOKEN and GUILD_ID env vars)
+    desc: Start Go + Node.js with Discord bot (reads from app/.env)
     cmds:
       - task: kill
       - |
@@ -56,7 +45,12 @@ tasks:
         echo "Press Ctrl+C to stop all servers"
         echo "=========================================="
         echo ""
-      - npx concurrently --kill-others --names "Go,Node" --prefix-colors "cyan,green" --prefix "[{name}]" "go run cmd/playground/main.go" "cd app && npm run dev"
+      - |
+        # Load env vars from app/.env for Go server
+        set -a
+        [ -f app/.env ] && source app/.env
+        set +a
+        npx concurrently --kill-others --names "Go,Node" --prefix-colors "cyan,green" --prefix "[{name}]" "go run cmd/playground/main.go" "cd app && npm run dev"
 
   go:
     desc: Start only Go server

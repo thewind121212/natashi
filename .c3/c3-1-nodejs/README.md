@@ -17,7 +17,7 @@ The Node.js Application is the **brain/orchestrator** of the Music Bot system. I
 | **Runtime** | Node.js 20 LTS |
 | **Role** | Gateway, Discord integration, state management |
 | **HTTP Server** | Express on port 3000 |
-| **Code Location** | `playground/src/` (current), `node/src/` (Discord - future) |
+| **Code Location** | `app/src/` |
 
 ## Container Diagram
 
@@ -67,13 +67,13 @@ flowchart TB
 
 | ID | Component | Responsibility | Code Location |
 |----|-----------|----------------|---------------|
-| c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/commands/` (future) |
-| c3-102 | Voice Manager | Voice connections | `node/src/voice/` (future) |
-| c3-103 | Queue Manager | Playlist state, track navigation | `playground/src/queue-manager.ts` |
-| c3-104 | API Client | HTTP client to Go API | `playground/src/api-client.ts` |
-| c3-105 | Socket Client | Audio stream receiver | `playground/src/socket-client.ts` |
-| c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
-| c3-107 | WebSocket Handler | Real-time browser events, queue sync | `playground/src/websocket.ts` |
+| c3-101 | Discord Bot | Slash commands, Discord.js | `app/src/commands/` |
+| c3-102 | Voice Manager | Voice connections | `app/src/voice/` |
+| c3-103 | Queue Manager | Playlist state, track navigation | `app/src/queue-manager.ts` |
+| c3-104 | API Client | HTTP client to Go API | `app/src/api-client.ts` |
+| c3-105 | Socket Client | Audio stream receiver | `app/src/socket-client.ts` |
+| c3-106 | Express Server | HTTP API for browser | `app/src/server.ts` |
+| c3-107 | WebSocket Handler | Real-time browser events, queue sync | `app/src/websocket.ts` |
 
 ## Component Interactions
 
@@ -188,31 +188,38 @@ sequenceDiagram
 | TypeScript | 5.x | Language |
 | Express | 4.x | HTTP server |
 | ws | 8.x | WebSocket |
-| discord.js | v14 | Discord API (future) |
-| @discordjs/voice | latest | Voice connections (future) |
+| discord.js | v14 | Discord API |
+| @discordjs/voice | latest | Voice connections |
 
 ## Directory Structure
 
 ```
-playground/src/
+app/src/
 ├── index.ts           # Entry point
+├── config.ts          # Configuration
 ├── server.ts          # c3-106: Express server
 ├── websocket.ts       # c3-107: WebSocket handler
 ├── api-client.ts      # c3-104: Go API client
 ├── socket-client.ts   # c3-105: Socket client
 ├── queue-manager.ts   # c3-103: Queue manager
-└── audio-player.ts    # Debug audio output
+├── audio-player.ts    # Debug audio output
+├── commands/          # c3-101: Discord bot commands
+│   ├── index.ts
+│   ├── play.ts
+│   └── stop.ts
+├── voice/             # c3-102: Voice manager
+│   └── manager.ts
+└── tests/
 
-playground/client/src/
-├── App.tsx            # React main component
-├── App.css            # Custom animations
+playground/src/        # React UI (Vite)
+├── App.tsx
 ├── components/
 │   ├── PlayerBar.tsx  # Spotify-style bottom player bar
 │   ├── QueueList.tsx  # Collapsible queue with track list
 │   ├── LogViewer.tsx  # Server log viewer with tabs
 │   └── ui/            # Shadcn UI components
 └── hooks/
-    └── useWebSocket.ts  # React WebSocket state hook
+    └── useWebSocket.ts
 ```
 
 ## Communication with Go Application

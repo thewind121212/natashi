@@ -28,7 +28,7 @@ func DefaultConfig() Config {
 	return Config{
 		SampleRate: 48000,
 		Channels:   2,
-		Bitrate:    128000,
+		Bitrate:    256000, // 256kbps - best practical quality for Opus
 		Volume:     1.0,
 	}
 }

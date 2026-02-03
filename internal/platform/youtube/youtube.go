@@ -3,9 +3,42 @@ package youtube
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
+
+// Config holds YouTube extractor configuration.
+type Config struct {
+	// CookiesFromBrowser extracts cookies from browser (e.g., "firefox", "chrome", "safari")
+	CookiesFromBrowser string
+	// CookiesFile path to cookies.txt file (alternative to browser cookies)
+	CookiesFile string
+}
+
+var config Config
+
+// SetConfig sets the YouTube extractor configuration.
+func SetConfig(c Config) {
+	config = c
+}
+
+// LoadConfigFromEnv loads configuration from environment variables.
+func LoadConfigFromEnv() {
+	config.CookiesFromBrowser = os.Getenv("YT_COOKIES_BROWSER")
+	config.CookiesFile = os.Getenv("YT_COOKIES_FILE")
+}
+
+// getCookieArgs returns yt-dlp arguments for cookie authentication.
+func getCookieArgs() []string {
+	if config.CookiesFromBrowser != "" {
+		return []string{"--cookies-from-browser", config.CookiesFromBrowser}
+	}
+	if config.CookiesFile != "" {
+		return []string{"--cookies", config.CookiesFile}
+	}
+	return nil
+}
 
 // Extractor implements platform.StreamExtractor for YouTube.
 // Single Responsibility: Only handles YouTube stream extraction.
@@ -29,16 +62,20 @@ func (e *Extractor) CanHandle(url string) bool {
 
 // ExtractStreamURL extracts the direct audio stream URL from a YouTube URL.
 func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
-	cmd := exec.Command("yt-dlp",
-		"--no-playlist",           // single video only
-		"--no-warnings",           // suppress warnings for speed
-		"--no-check-certificate",  // skip SSL verification (faster)
-		"--socket-timeout", "10",  // shorter timeout
-		"--extractor-args", "youtube:player_client=android", // faster extraction
-		"-f", "bestaudio[ext=webm]/bestaudio/best", // prefer webm (opus) for speed
-		"--get-url",               // print direct stream URL only
-		youtubeURL,
-	)
+	args := []string{
+		"--no-playlist",          // single video only
+		"--no-warnings",          // suppress warnings for speed
+		"--no-check-certificate", // skip SSL verification (faster)
+		"--socket-timeout", "10", // shorter timeout
+		"-f", "bestaudio",        // best audio quality available
+		"--get-url",              // print direct stream URL only
+	}
+
+	// Add cookie args for authenticated access (better quality)
+	args = append(args, getCookieArgs()...)
+	args = append(args, youtubeURL)
+
+	cmd := exec.Command("yt-dlp", args...)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -61,16 +98,19 @@ type Metadata struct {
 
 // ExtractMetadata extracts track metadata without downloading.
 func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
-	cmd := exec.Command("yt-dlp",
+	args := []string{
 		"--no-playlist",
 		"--no-warnings",
 		"--no-check-certificate",
 		"--socket-timeout", "10",
-		"--extractor-args", "youtube:player_client=android",
 		"-j", // JSON output
 		"--skip-download",
-		youtubeURL,
-	)
+	}
+
+	args = append(args, getCookieArgs()...)
+	args = append(args, youtubeURL)
+
+	cmd := exec.Command("yt-dlp", args...)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -100,15 +140,19 @@ type PlaylistEntry struct {
 
 // ExtractPlaylist extracts all videos from a YouTube playlist.
 func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error) {
-	cmd := exec.Command("yt-dlp",
+	args := []string{
 		"--yes-playlist",
 		"--flat-playlist", // Don't download, just list
 		"--no-warnings",
 		"--no-check-certificate",
 		"--socket-timeout", "15",
 		"-j", // JSON output per entry
-		playlistURL,
-	)
+	}
+
+	args = append(args, getCookieArgs()...)
+	args = append(args, playlistURL)
+
+	cmd := exec.Command("yt-dlp", args...)
 
 	out, err := cmd.Output()
 	if err != nil {

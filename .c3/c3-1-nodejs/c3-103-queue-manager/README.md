@@ -64,10 +64,8 @@ stateDiagram-v2
 ## Directory Structure
 
 ```
-node/src/queue/
-├── manager.ts        # Queue manager class
-├── track.ts          # Track interface
-└── index.ts          # Queue exports
+app/src/
+└── queue-manager.ts  # Queue manager
 ```
 
 ## Dependencies

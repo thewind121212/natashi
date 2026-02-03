@@ -98,13 +98,13 @@ sequenceDiagram
 
 | ID | Component | Responsibility | Code Location |
 |----|-----------|----------------|---------------|
-| c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/` (future) |
-| c3-102 | Voice Manager | @discordjs/voice | `node/src/` (future) |
-| c3-103 | Queue Manager | Playlist state, track navigation | `playground/src/queue-manager.ts` |
-| c3-104 | API Client | HTTP client to Go | `playground/src/api-client.ts` |
-| c3-105 | Socket Client | Unix socket receiver | `playground/src/socket-client.ts` |
-| c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
-| c3-107 | WebSocket Handler | Real-time events, queue sync | `playground/src/websocket.ts` |
+| c3-101 | Discord Bot | Slash commands, Discord.js | `app/src/commands/` |
+| c3-102 | Voice Manager | @discordjs/voice | `app/src/voice/` |
+| c3-103 | Queue Manager | Playlist state, track navigation | `app/src/queue-manager.ts` |
+| c3-104 | API Client | HTTP client to Go | `app/src/api-client.ts` |
+| c3-105 | Socket Client | Unix socket receiver | `app/src/socket-client.ts` |
+| c3-106 | Express Server | HTTP API for browser | `app/src/server.ts` |
+| c3-107 | WebSocket Handler | Real-time events, queue sync | `app/src/websocket.ts` |
 
 ### C3-2: Go Audio Application
 
@@ -137,7 +137,7 @@ sequenceDiagram
 
 ## Playground Features
 
-The playground (`playground/client/`) is a React UI for testing the audio pipeline.
+The playground (`playground/`) is a React UI for testing the audio pipeline.
 
 ### UI Components
 
@@ -177,11 +177,13 @@ The playground (`playground/client/`) is a React UI for testing the audio pipeli
 | c3-204 Opus Encoder | Done | `internal/encoder/ffmpeg.go` |
 | c3-205 Jitter Buffer | TODO | `internal/buffer/` |
 | c3-206 Socket Server | Done | `internal/server/socket.go` |
-| c3-103 Queue Manager | Done | `playground/src/queue-manager.ts` |
-| c3-104 API Client | Done | `playground/src/api-client.ts` |
-| c3-105 Socket Client | Done | `playground/src/socket-client.ts` |
-| c3-106 Express Server | Done | `playground/src/server.ts` |
-| c3-107 WebSocket Handler | Done | `playground/src/websocket.ts` |
+| c3-101 Discord Bot | Done | `app/src/commands/` |
+| c3-102 Voice Manager | Done | `app/src/voice/` |
+| c3-103 Queue Manager | Done | `app/src/queue-manager.ts` |
+| c3-104 API Client | Done | `app/src/api-client.ts` |
+| c3-105 Socket Client | Done | `app/src/socket-client.ts` |
+| c3-106 Express Server | Done | `app/src/server.ts` |
+| c3-107 WebSocket Handler | Done | `app/src/websocket.ts` |
 
 ### TODO (for Lavalink quality)
 
@@ -190,8 +192,6 @@ The playground (`playground/client/`) is a React UI for testing the audio pipeli
 | **c3-205 Jitter Buffer** | HIGH | Smooth frame delivery (3-5 frames) |
 | **Worker Pool** | HIGH | Concurrent channel support (60+) |
 | **Opus Tuning** | HIGH | Optimize encoding settings |
-| c3-101 Discord Bot | MEDIUM | discord.js integration |
-| c3-102 Voice Manager | MEDIUM | @discordjs/voice |
 
 ## Audio Quality Specs
 
@@ -209,8 +209,8 @@ The playground (`playground/client/`) is a React UI for testing the audio pipeli
 # Run playground (debug - audio plays to speakers)
 task run:debug
 
-# Run playground (no audio)
-task run
+# Run Discord bot
+task run:bot
 
 # Build
 task build
@@ -227,8 +227,8 @@ task kill
 ## Directory Structure
 
 ```
-music-bot/
-├── cmd/playground/main.go     # Entry point
+natashi/
+├── cmd/playground/main.go     # Go entry point
 ├── internal/
 │   ├── server/
 │   │   ├── api.go             # c3-201: Gin handlers
@@ -239,22 +239,32 @@ music-bot/
 │   │   └── ffmpeg.go          # c3-204: FFmpeg + format options
 │   ├── buffer/                # c3-205: Jitter buffer (TODO)
 │   └── platform/youtube/      # c3-203: yt-dlp extractor
-├── playground/
-│   ├── src/                   # Node.js gateway
-│   │   ├── api-client.ts      # c3-104: Gin API client
-│   │   ├── socket-client.ts   # c3-105: Audio receiver
-│   │   ├── server.ts          # c3-106: Express server
-│   │   ├── websocket.ts       # c3-107: WebSocket handler
-│   │   └── queue-manager.ts   # c3-103: Queue/playlist manager
-│   └── client/                # React UI
-│       └── src/
-│           ├── App.tsx
-│           ├── components/
-│           │   ├── PlayerBar.tsx    # Spotify-style bottom player
-│           │   ├── QueueList.tsx    # Collapsible queue view
-│           │   └── LogViewer.tsx    # Server logs
-│           └── hooks/
-│               └── useWebSocket.ts  # WebSocket state hook
+├── app/                       # Node.js server
+│   └── src/
+│       ├── index.ts           # Entry point
+│       ├── config.ts          # Configuration
+│       ├── api-client.ts      # c3-104: Gin API client
+│       ├── socket-client.ts   # c3-105: Audio receiver
+│       ├── server.ts          # c3-106: Express server
+│       ├── websocket.ts       # c3-107: WebSocket handler
+│       ├── queue-manager.ts   # c3-103: Queue/playlist manager
+│       ├── audio-player.ts    # Debug audio output
+│       ├── commands/          # c3-101: Discord bot commands
+│       │   ├── index.ts
+│       │   ├── play.ts
+│       │   └── stop.ts
+│       ├── voice/             # c3-102: Voice manager
+│       │   └── manager.ts
+│       └── tests/
+├── playground/                # React UI (Vite)
+│   └── src/
+│       ├── App.tsx
+│       ├── components/
+│       │   ├── PlayerBar.tsx  # Spotify-style bottom player
+│       │   ├── QueueList.tsx  # Collapsible queue view
+│       │   └── LogViewer.tsx  # Server logs
+│       └── hooks/
+│           └── useWebSocket.ts
 ├── .c3/                       # Architecture docs (C4 model)
 └── Taskfile.yml
 ```
