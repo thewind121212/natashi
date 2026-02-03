@@ -46,6 +46,7 @@ interface UseWebSocketReturn {
   removeFromQueue: (index: number) => void;
   playFromQueue: (index: number) => void;
   skip: () => void;
+  previous: () => void;
   clearQueue: () => void;
 }
 
@@ -350,6 +351,12 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', 'Skip requested');
   }, [updateStatus, addLog]);
 
+  const previous = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'previous' }));
+    updateStatus('Going back...');
+    addLog('nodejs', 'Previous requested');
+  }, [updateStatus, addLog]);
+
   const clearQueue = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'clearQueue' }));
     updateStatus('Queue cleared');
@@ -383,6 +390,7 @@ export function useWebSocket(): UseWebSocketReturn {
     removeFromQueue,
     playFromQueue,
     skip,
+    previous,
     clearQueue,
   };
 }

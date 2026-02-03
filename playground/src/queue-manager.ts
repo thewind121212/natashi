@@ -72,6 +72,17 @@ export class QueueManager extends EventEmitter {
     return null;
   }
 
+  // Get previous track and go back
+  previous(): Track | null {
+    if (this.currentIndex > 0) {
+      this.currentIndex--;
+      this.emitUpdate();
+      return this.queue[this.currentIndex];
+    }
+    // Already at start
+    return null;
+  }
+
   // Called when current track finishes naturally
   currentFinished(): Track | null {
     return this.skip();
@@ -111,6 +122,10 @@ export class QueueManager extends EventEmitter {
 
   hasNext(): boolean {
     return this.currentIndex < this.queue.length - 1;
+  }
+
+  hasPrevious(): boolean {
+    return this.currentIndex > 0;
   }
 
   getState(): QueueState {

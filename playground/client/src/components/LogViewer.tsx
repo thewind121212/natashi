@@ -37,7 +37,7 @@ function LogList({ logs }: { logs: LogEntry[] }) {
   }, [logs]);
 
   return (
-    <ScrollArea className="h-[300px] w-full rounded-md border bg-black/50 p-4" ref={scrollRef}>
+    <ScrollArea className="h-[500px] w-full rounded-md border bg-black/50 p-4" ref={scrollRef}>
       <div className="space-y-1">
         {logs.length === 0 ? (
           <div className="text-muted-foreground text-sm">No logs yet...</div>

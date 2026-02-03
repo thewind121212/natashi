@@ -411,6 +411,25 @@ export class WebSocketHandler {
           this.broadcastJson({ type: 'queueFinished' });
         }
 
+      } else if (message.action === 'previous') {
+        // Go to previous track
+        this.log('nodejs', 'Previous requested');
+        if (this.currentSessionId) {
+          try {
+            await this.apiClient.stop(this.currentSessionId);
+          } catch (err) {
+            this.log('nodejs', `Stop error: ${err}`);
+          }
+        }
+        this.resetPlaybackState();
+
+        const prevTrack = this.queueManager.previous();
+        if (prevTrack) {
+          await this.playTrack(prevTrack.url);
+        } else {
+          this.log('nodejs', 'Already at start of queue');
+        }
+
       } else if (message.action === 'clearQueue') {
         // Clear queue and stop
         this.log('nodejs', 'Clearing queue');

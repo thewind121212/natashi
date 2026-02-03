@@ -1,1 +1,60 @@
 /* App-specific styles - most styling handled by Tailwind */
+
+/* Player bar animations */
+@keyframes bounce-bar {
+  0%, 100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-bounce-bar {
+  animation: bounce-bar 0.6s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s ease-in-out infinite;
+}
+
+/* Collapsible animations */
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+[data-state="open"] > .collapsible-content {
+  animation: collapsible-down 250ms ease-out;
+}
+
+[data-state="closed"] > .collapsible-content {
+  animation: collapsible-up 200ms ease-out;
+}
