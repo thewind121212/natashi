@@ -4,7 +4,6 @@ import { LogViewer } from '@/components/LogViewer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Switch } from '@/components/ui/switch';
 import './App.css';
 
 function App() {
@@ -12,13 +11,15 @@ function App() {
   const {
     isConnected,
     debugMode,
+    isPaused,
     status,
     statusType,
     isPlaying,
     logs,
     play,
     stop,
-    setDebugMode,
+    pause,
+    resume,
     clearLogs,
   } = useWebSocket();
 
@@ -44,11 +45,19 @@ function App() {
       <div className="mx-auto max-w-2xl">
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-3xl font-bold text-cyan-400">Audio Playground</h1>
-          <div className="flex items-center gap-2">
-            <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-sm text-muted-foreground">
-              {isConnected ? 'Connected' : 'Disconnected'}
-            </span>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 rounded-full ${debugMode ? 'bg-yellow-500' : 'bg-gray-500'}`} />
+              <span className="text-xs text-muted-foreground">
+                {debugMode ? 'Audio ON' : 'Audio OFF'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="text-sm text-muted-foreground">
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -57,20 +66,6 @@ function App() {
             <CardTitle className="text-lg">Player Controls</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between rounded-lg border bg-card p-4">
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="debug"
-                  checked={debugMode}
-                  onCheckedChange={setDebugMode}
-                />
-                <label htmlFor="debug" className="cursor-pointer select-none">
-                  Debug Mode (play to macOS speakers)
-                </label>
-              </div>
-              <span className="text-xs text-muted-foreground">Enable to hear audio</span>
-            </div>
-
             <div className="flex gap-3">
               <Input
                 type="text"
@@ -82,18 +77,40 @@ function App() {
               />
               <Button
                 onClick={() => play(url)}
-                disabled={isPlaying}
+                disabled={!url.trim()}
                 className="bg-cyan-500 text-black hover:bg-cyan-400"
               >
                 Play
               </Button>
-              <Button
-                onClick={stop}
-                disabled={!isPlaying}
-                variant="destructive"
-              >
-                Stop
-              </Button>
+            </div>
+
+            <div className="flex gap-3">
+              {isPlaying && !isPaused && (
+                <Button
+                  onClick={pause}
+                  variant="secondary"
+                  className="flex-1"
+                >
+                  ⏸ Pause
+                </Button>
+              )}
+              {isPlaying && isPaused && (
+                <Button
+                  onClick={resume}
+                  className="flex-1 bg-green-600 hover:bg-green-500"
+                >
+                  ▶ Resume
+                </Button>
+              )}
+              {isPlaying && (
+                <Button
+                  onClick={stop}
+                  variant="destructive"
+                  className="flex-1"
+                >
+                  ⏹ Stop
+                </Button>
+              )}
             </div>
 
             <div className={`rounded-lg border p-4 ${getStatusClass()}`}>
@@ -105,8 +122,9 @@ function App() {
         <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="text-sm text-muted-foreground">
-              <strong className="text-foreground">Flow:</strong><br />
-              Browser → Node.js → Go → FFmpeg → PCM audio → Node.js → [if debug] macOS speakers
+              <strong className="text-foreground">Usage:</strong><br />
+              <code className="text-xs bg-black/30 px-1 rounded">task run</code> - No audio output<br />
+              <code className="text-xs bg-black/30 px-1 rounded">task run:debug</code> - Audio plays to macOS speakers
             </div>
           </CardContent>
         </Card>

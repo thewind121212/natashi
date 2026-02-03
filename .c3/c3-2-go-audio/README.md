@@ -8,14 +8,15 @@ A **Container** is an application or data store - something that needs to be **r
 
 ## Overview
 
-The Go Audio Application is the **audio processor** of the Music Bot system. It handles stream extraction, audio encoding, and frame buffering with high performance and low latency.
+The Go Audio Application is the **audio processor** of the Music Bot system. It handles stream extraction, audio encoding, and session management with high performance and low latency.
 
 | Aspect | Value |
 |--------|-------|
 | **Runtime** | Go 1.21+ |
-| **Role** | Audio processing, stream extraction, Opus encoding |
-| **Process** | Single Go process with worker pool |
-| **Code Location** | `go/` |
+| **Role** | Audio processing, stream extraction, session management |
+| **HTTP API** | Gin framework on port 8180 |
+| **Audio Output** | Unix socket `/tmp/music-playground.sock` |
+| **Code Location** | `internal/`, `cmd/playground/` |
 
 ## Container Diagram
 
@@ -26,57 +27,162 @@ flowchart TB
     end
 
     subgraph C3_1["C3-1: Node.js Application"]
-        NODE[Discord Integration]
+        API_CLIENT[API Client]
+        SOCKET_CLIENT[Socket Client]
     end
 
     subgraph C3_2["C3-2: Go Audio Application"]
-        C201[c3-201<br/>Audio Processor]
-        C202[c3-202<br/>Stream Extractor]
-        C203[c3-203<br/>Opus Encoder]
-        C204[c3-204<br/>Jitter Buffer]
+        c3_201[c3-201<br/>Gin API Server<br/>:8180]
+        c3_202[c3-202<br/>Session Manager]
+        c3_203[c3-203<br/>Stream Extractor]
+        c3_204[c3-204<br/>FFmpeg Encoder]
+        c3_205[c3-205<br/>Socket Server]
     end
 
-    NODE <-.->|Unix Socket IPC| C201
-    C201 --> C202
-    C202 -->|Stream URL| YOUTUBE
-    YOUTUBE -->|Audio Stream| C203
-    C202 --> C203
-    C203 --> C204
-    C204 -.->|Audio Frames| NODE
+    API_CLIENT -->|HTTP| c3_201
+    c3_201 --> c3_202
+    c3_202 --> c3_203
+    c3_203 -->|yt-dlp| YOUTUBE
+    c3_203 --> c3_204
+    c3_204 --> c3_205
+    c3_205 <-->|Unix Socket| SOCKET_CLIENT
 ```
-
-## Responsibilities
-
-| Responsibility | Description |
-|----------------|-------------|
-| Stream Extraction | Use yt-dlp to get audio stream URLs |
-| Audio Decoding | Decode audio via FFmpeg |
-| Opus Encoding | Encode to Discord-compatible Opus format |
-| Frame Buffering | Buffer frames for smooth delivery |
-| Worker Management | Pool of workers for concurrent channels |
 
 ## Components
 
 | ID | Component | Responsibility | Code Location |
 |----|-----------|----------------|---------------|
-| [c3-201](./c3-201-audio-processor/README.md) | Audio Processor | Worker pool, session management | `go/internal/server/`, `go/internal/worker/` |
-| [c3-202](./c3-202-stream-extractor/README.md) | Stream Extractor | yt-dlp integration | `go/internal/extractor/` |
-| [c3-203](./c3-203-opus-encoder/README.md) | Opus Encoder | FFmpeg + libopus encoding | `go/internal/encoder/` |
-| [c3-204](./c3-204-jitter-buffer/README.md) | Jitter Buffer | Frame buffering, smoothing | `go/internal/buffer/` |
+| c3-201 | Gin API Server | HTTP control endpoints | `internal/server/api.go`, `router.go` |
+| c3-202 | Session Manager | Session lifecycle, pause/resume | `internal/server/session.go` |
+| c3-203 | Stream Extractor | yt-dlp integration | `internal/platform/youtube/` |
+| c3-204 | FFmpeg Encoder | Audio decoding/encoding pipeline | `internal/encoder/ffmpeg.go` |
+| c3-205 | Socket Server | Audio streaming to Node.js | `internal/server/socket.go` |
 
 ## Component Interactions
 
 ```mermaid
 flowchart LR
-    C201[c3-201<br/>Audio Processor]
-    C202[c3-202<br/>Stream Extractor]
-    C203[c3-203<br/>Opus Encoder]
-    C204[c3-204<br/>Jitter Buffer]
+    c3_201[c3-201<br/>Gin API]
+    c3_202[c3-202<br/>Session Manager]
+    c3_203[c3-203<br/>Stream Extractor]
+    c3_204[c3-204<br/>FFmpeg Encoder]
+    c3_205[c3-205<br/>Socket Server]
 
-    C201 -->|"extract(url)"| C202
-    C202 -->|"streamUrl"| C203
-    C203 -->|"opusFrame"| C204
-    C204 -->|"status"| C201
+    c3_201 -->|"StartPlayback()"| c3_202
+    c3_202 -->|"ExtractStreamURL()"| c3_203
+    c3_203 -->|"streamUrl"| c3_204
+    c3_204 -->|"audioChunks"| c3_205
+    c3_205 -->|"events"| c3_202
+```
+
+## API Endpoints (c3-201)
+
+```mermaid
+flowchart LR
+    subgraph Endpoints["Gin API :8180"]
+        PLAY["POST /session/:id/play"]
+        STOP["POST /session/:id/stop"]
+        PAUSE["POST /session/:id/pause"]
+        RESUME["POST /session/:id/resume"]
+        STATUS["GET /session/:id/status"]
+        HEALTH["GET /health"]
+    end
+```
+
+| Endpoint | Method | Request | Response |
+|----------|--------|---------|----------|
+| `/session/:id/play` | POST | `{url, format}` | `{status, session_id}` |
+| `/session/:id/stop` | POST | - | `{status, session_id}` |
+| `/session/:id/pause` | POST | - | `{status, session_id}` |
+| `/session/:id/resume` | POST | - | `{status, session_id}` |
+| `/session/:id/status` | GET | - | `{session_id, status, bytes_sent}` |
+| `/health` | GET | - | `{status: "ok"}` |
+
+## Session State Machine (c3-202)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Extracting: play
+    Extracting --> Streaming: ready
+    Extracting --> Error: extraction failed
+    Streaming --> Paused: pause
+    Paused --> Streaming: resume
+    Streaming --> Stopped: stop
+    Paused --> Stopped: stop
+    Streaming --> Stopped: finished
+    Error --> [*]
+    Stopped --> [*]
+```
+
+## Audio Pipeline (c3-203, c3-204)
+
+```mermaid
+flowchart LR
+    subgraph Input["Input"]
+        URL[YouTube URL]
+    end
+
+    subgraph c3_203["c3-203 Extractor"]
+        YTDLP[yt-dlp]
+        STREAM[Stream URL]
+    end
+
+    subgraph c3_204["c3-204 FFmpeg"]
+        DECODE[Decode]
+        RESAMPLE[Resample 48kHz]
+        ENCODE[Encode PCM/Opus]
+    end
+
+    subgraph Output["Output"]
+        CHUNKS[Audio Chunks]
+    end
+
+    URL --> YTDLP --> STREAM --> DECODE --> RESAMPLE --> ENCODE --> CHUNKS
+```
+
+## Socket Protocol (c3-205)
+
+### Events (JSON, newline-delimited)
+
+```json
+{"type": "ready", "session_id": "abc123"}
+{"type": "finished", "session_id": "abc123"}
+{"type": "error", "session_id": "abc123", "message": "..."}
+```
+
+### Audio Data (Binary)
+
+```
+┌─────────────────────┬─────────────────────┐
+│ Length (4 bytes)    │ Audio Data          │
+│ Big-endian uint32   │ Variable length     │
+└─────────────────────┴─────────────────────┘
+```
+
+## Concurrency Model
+
+```mermaid
+flowchart TB
+    subgraph Main["Main Goroutine"]
+        GIN[Gin HTTP Server]
+        ACCEPT[Socket Accept Loop]
+    end
+
+    subgraph Sessions["Session Goroutines"]
+        S1[Session 1<br/>goroutine]
+        S2[Session 2<br/>goroutine]
+        SN[Session N<br/>goroutine]
+    end
+
+    subgraph PerSession["Per Session"]
+        EXTRACT[Extract URL]
+        FFMPEG[FFmpeg Process]
+        STREAM[Stream Audio]
+    end
+
+    GIN -->|"StartPlayback()"| Sessions
+    Sessions --> PerSession
 ```
 
 ## Technology Stack
@@ -84,139 +190,49 @@ flowchart LR
 | Technology | Version | Purpose |
 |------------|---------|---------|
 | Go | 1.21+ | Runtime |
+| Gin | latest | HTTP framework |
 | yt-dlp | latest | Stream extraction |
-| FFmpeg | latest | Audio decoding |
-| libopus | latest | Opus encoding |
+| FFmpeg | latest | Audio processing |
 
 ## Directory Structure
 
 ```
-go/
-├── cmd/
-│   └── main.go              # Entry point
-└── internal/
-    ├── server/              # c3-201: Socket server
-    │   ├── socket.go
-    │   └── handler.go
-    ├── worker/              # c3-201: Worker pool
-    │   ├── pool.go
-    │   └── session.go
-    ├── extractor/           # c3-202: yt-dlp wrapper
-    │   ├── ytdlp.go
-    │   └── cache.go
-    ├── encoder/             # c3-203: FFmpeg + Opus
-    │   ├── ffmpeg.go
-    │   └── opus.go
-    └── buffer/              # c3-204: Jitter buffer
-        └── jitter.go
+internal/
+├── server/
+│   ├── api.go           # c3-201: Gin handlers
+│   ├── router.go        # c3-201: Gin routes
+│   ├── session.go       # c3-202: Session manager
+│   ├── socket.go        # c3-205: Socket server
+│   └── types.go         # Protocol types
+├── encoder/
+│   ├── ffmpeg.go        # c3-204: FFmpeg pipeline
+│   └── types.go         # Format definitions
+└── platform/
+    ├── platform.go      # c3-203: Registry
+    └── youtube/
+        └── youtube.go   # c3-203: yt-dlp wrapper
+
+cmd/playground/
+└── main.go              # Entry point
 ```
 
-## Communication with Node.js Application
-
-### IPC Protocol
-
-This container communicates with [C3-1: Node.js Application](../c3-1-nodejs/README.md) via Unix sockets:
-
-| Socket | Direction | Format | Purpose |
-|--------|-----------|--------|---------|
-| `/tmp/music.sock` | Bidirectional | JSON | Commands and events |
-| `/tmp/music-audio.sock` | Go → Node | Binary | Audio frames |
-
-### Commands Received (Node → Go)
-
-```json
-{"type": "play", "channel_id": "123", "url": "https://..."}
-{"type": "pause", "channel_id": "123"}
-{"type": "resume", "channel_id": "123"}
-{"type": "stop", "channel_id": "123"}
-{"type": "volume", "channel_id": "123", "level": 0.8}
-```
-
-### Events Sent (Go → Node)
-
-```json
-{"type": "ready", "channel_id": "123", "duration": 240}
-{"type": "finished", "channel_id": "123"}
-{"type": "error", "channel_id": "123", "message": "..."}
-```
-
-### Audio Frame Format
-
-```
-┌──────────────┬──────────────┬─────────────────┐
-│ channel_id   │ sequence     │ opus_data       │
-│ (8 bytes)    │ (4 bytes)    │ (variable)      │
-└──────────────┴──────────────┴─────────────────┘
-```
-
-## Audio Pipeline
-
-```mermaid
-flowchart LR
-    subgraph Input["Input (Variable)"]
-        I1[YouTube URL]
-    end
-
-    subgraph C202["c3-202 Extractor"]
-        E1[yt-dlp]
-        E2[Stream URL]
-    end
-
-    subgraph C203["c3-203 Encoder"]
-        D1[FFmpeg Decode]
-        D2[Resample 48kHz]
-        D3[Opus Encode]
-    end
-
-    subgraph C204["c3-204 Buffer"]
-        B1[Jitter Buffer]
-        B2[Frame Output]
-    end
-
-    subgraph Output["Output (Fixed)"]
-        O1[48kHz Stereo]
-        O2[20ms Opus Frames]
-    end
-
-    Input --> C202 --> C203 --> C204 --> Output
-```
-
-## Audio Quality Requirements
+## Audio Quality Settings
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | Sample Rate | 48000 Hz | Discord native rate |
 | Channels | 2 (stereo) | Full quality |
-| Frame Size | 960 samples (20ms) | Discord requirement |
-| Bitrate | 128 kbps VBR | Good quality |
-| Jitter Buffer | 3-5 frames | Smooth delivery |
+| Frame Size | 4096 bytes | Efficient chunking |
+| Format | PCM (s16le) | Playground debug |
 
-## Concurrency Model
+## Environment Variables
 
-```mermaid
-flowchart TB
-    subgraph Main["Main Goroutine"]
-        ACCEPT[Socket Accept Loop]
-    end
-
-    subgraph Workers["Worker Pool (max 60)"]
-        W1[Worker 1<br/>channel: 111]
-        W2[Worker 2<br/>channel: 222]
-        WN[Worker N]
-    end
-
-    subgraph PerWorker["Per Worker Goroutines"]
-        EXT[Extract]
-        ENC[Encode]
-        BUF[Buffer]
-    end
-
-    ACCEPT --> Workers
-    Workers --> PerWorker
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GO_API_PORT` | `8180` | Gin HTTP port |
 
 ## See Also
 
-- [C3-1: Node.js Application](../c3-1-nodejs/README.md) - The other container
+- [C3-1: Node.js Application](../c3-1-nodejs/README.md) - Gateway container
 - [C3-0: Context](../c3-0-context/README.md) - System context
 - [Components Overview](./COMPONENTS.md) - Detailed component documentation

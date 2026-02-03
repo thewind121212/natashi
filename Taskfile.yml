@@ -10,7 +10,7 @@ tasks:
       - task --list
 
   run:
-    desc: Start all servers (Go + Node.js backend + Vite client)
+    desc: Start all servers (Go + Node.js backend + Vite client) - no audio output
     cmds:
       - task: kill
       - |
@@ -32,6 +32,39 @@ tasks:
         echo ""
         echo "Starting Vite client..."
         echo "Open http://localhost:5173 in your browser"
+        echo "Press Ctrl+C to stop all servers"
+        echo ""
+
+        cd playground/client && npm run dev
+
+        # When Vite exits, kill Go and Node
+        kill $GO_PID 2>/dev/null || true
+        kill $NODE_PID 2>/dev/null || true
+
+  run:debug:
+    desc: Start all servers with DEBUG mode (audio plays to macOS speakers)
+    cmds:
+      - task: kill
+      - |
+        echo "=== Audio Playground (DEBUG MODE) ==="
+        echo ""
+        echo "Starting Go server in background..."
+        go run cmd/playground/main.go &
+        GO_PID=$!
+        echo "Go server PID: $GO_PID"
+        sleep 2
+
+        echo ""
+        echo "Starting Node.js backend in background (DEBUG=1)..."
+        cd playground && DEBUG_AUDIO=1 npm run dev &
+        NODE_PID=$!
+        echo "Node.js server PID: $NODE_PID"
+        sleep 2
+
+        echo ""
+        echo "Starting Vite client..."
+        echo "Open http://localhost:5173 in your browser"
+        echo "Audio will play to macOS speakers!"
         echo "Press Ctrl+C to stop all servers"
         echo ""
 

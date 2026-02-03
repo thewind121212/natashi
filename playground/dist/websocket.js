@@ -3,16 +3,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WebSocketHandler = void 0;
 const ws_1 = require("ws");
 const socket_client_1 = require("./socket-client");
+const api_client_1 = require("./api-client");
 const audio_player_1 = require("./audio-player");
 class WebSocketHandler {
     constructor(server) {
         this.clients = new Set();
         this.currentSessionId = null;
         this.bytesReceived = 0;
-        this.debugMode = false; // When true, play audio to macOS speakers
+        this.isPaused = false;
+        this.isStreamReady = false;
         this.wss = new ws_1.WebSocketServer({ server });
         this.socketClient = new socket_client_1.SocketClient();
+        this.apiClient = new api_client_1.ApiClient();
         this.audioPlayer = new audio_player_1.AudioPlayer();
+        this.debugMode = process.env.DEBUG_AUDIO === '1';
+        if (this.debugMode) {
+            console.log('[WebSocket] Debug mode enabled via DEBUG_AUDIO=1');
+        }
         this.setupWebSocket();
         this.setupAudioPlayer();
     }
@@ -24,8 +31,12 @@ class WebSocketHandler {
         this.wss.on('connection', (ws) => {
             this.log('nodejs', 'Browser connected');
             this.clients.add(ws);
-            // Send current debug mode state
-            ws.send(JSON.stringify({ type: 'debug_mode', enabled: this.debugMode }));
+            ws.send(JSON.stringify({
+                type: 'state',
+                debugMode: this.debugMode,
+                isPaused: this.isPaused,
+                isPlaying: this.currentSessionId !== null,
+            }));
             ws.on('message', (data) => this.handleBrowserMessage(ws, data));
             ws.on('close', () => {
                 this.log('nodejs', 'Browser disconnected');
@@ -38,29 +49,43 @@ class WebSocketHandler {
     }
     setupAudioPlayer() {
         this.audioPlayer.on('stopped', () => {
-            this.broadcastJson({ type: 'player_stopped' });
+            // Don't broadcast - we handle state manually
         });
         this.audioPlayer.on('error', (err) => {
             this.log('nodejs', `Audio player error: ${err.message}`);
-            this.broadcastJson({ type: 'error', message: 'Audio player error: ' + err.message });
         });
     }
     async connect() {
+        // First check if Go API is healthy
+        try {
+            const health = await this.apiClient.health();
+            this.log('nodejs', `Go API health: ${health.status}`);
+        }
+        catch (err) {
+            throw new Error('Go API not available. Start Go server first.');
+        }
+        // Then connect socket for audio
         try {
             await this.socketClient.connect();
-            this.log('nodejs', 'Connected to Go server');
+            this.log('nodejs', 'Connected to Go socket (audio)');
             this.socketClient.on('event', (event) => {
-                this.log('go', `Event: ${event.type}`);
                 this.handleGoEvent(event);
             });
             this.socketClient.on('audio', (data) => {
+                // Skip if paused or no active session
+                if (this.isPaused || !this.currentSessionId) {
+                    return;
+                }
                 this.bytesReceived += data.length;
-                // Play audio if debug mode is enabled
-                if (this.debugMode) {
+                // Log first audio chunk
+                if (this.bytesReceived === data.length) {
+                    this.log('nodejs', `First audio chunk: ${data.length} bytes, streamReady=${this.isStreamReady}`);
+                }
+                // Play audio if debug mode is enabled and stream is ready
+                if (this.debugMode && this.isStreamReady) {
                     this.audioPlayer.write(data);
                 }
                 // Update browser with progress every ~100KB
-                // PCM 48kHz stereo 16-bit = 192000 bytes/sec
                 if (this.bytesReceived % 100000 < data.length) {
                     const playbackSecs = this.bytesReceived / 192000;
                     this.broadcastJson({
@@ -71,22 +96,38 @@ class WebSocketHandler {
                 }
             });
             this.socketClient.on('close', () => {
-                this.log('go', 'Connection closed');
-                this.audioPlayer.stop();
+                this.log('go', 'Socket connection closed');
+                this.resetPlaybackState();
                 this.broadcastJson({ type: 'error', session_id: '', message: 'Server disconnected' });
             });
         }
         catch (err) {
-            this.log('nodejs', `Failed to connect to Go server: ${err}`);
+            this.log('nodejs', `Failed to connect to Go socket: ${err}`);
             throw err;
         }
     }
+    resetPlaybackState() {
+        this.audioPlayer.stop();
+        this.currentSessionId = null;
+        this.isPaused = false;
+        this.isStreamReady = false;
+        this.bytesReceived = 0;
+    }
     handleGoEvent(event) {
+        // IMPORTANT: Ignore events from old sessions
+        const eventSessionShort = event.session_id ? event.session_id.slice(0, 8) : 'none';
+        const currentSessionShort = this.currentSessionId ? this.currentSessionId.slice(0, 8) : 'none';
+        this.log('go', `Event: ${event.type} (event=${eventSessionShort}, current=${currentSessionShort})`);
+        if (event.session_id && this.currentSessionId && event.session_id !== this.currentSessionId) {
+            this.log('go', `Ignoring - session mismatch`);
+            return;
+        }
         switch (event.type) {
             case 'ready':
-                this.log('go', 'Stream ready');
-                if (this.debugMode) {
-                    this.log('nodejs', 'Debug mode ON - playing to macOS speakers');
+                this.isStreamReady = true;
+                this.log('nodejs', `Ready received: debugMode=${this.debugMode}, isPaused=${this.isPaused}`);
+                if (this.debugMode && !this.isPaused) {
+                    this.log('nodejs', 'Starting audio player');
                     this.audioPlayer.start();
                 }
                 this.broadcastJson(event);
@@ -96,54 +137,101 @@ class WebSocketHandler {
                 if (this.debugMode) {
                     this.audioPlayer.end();
                 }
-                this.broadcastJson(event);
+                this.currentSessionId = null;
+                this.isStreamReady = false;
+                this.broadcastJson({ ...event, bytes: this.bytesReceived });
                 break;
             case 'error':
                 this.log('go', `Error: ${event.message}`);
-                this.audioPlayer.stop();
+                this.resetPlaybackState();
                 this.broadcastJson(event);
                 break;
             default:
                 this.broadcastJson(event);
         }
     }
-    handleBrowserMessage(ws, data) {
+    async handleBrowserMessage(ws, data) {
         try {
             const message = JSON.parse(data.toString());
             this.log('nodejs', `Browser action: ${message.action || message.type}`);
             if (message.action === 'play' && message.url) {
+                // Stop current session if any
+                if (this.currentSessionId) {
+                    this.log('nodejs', 'Stopping current session for new play');
+                    try {
+                        await this.apiClient.stop(this.currentSessionId);
+                    }
+                    catch (err) {
+                        this.log('nodejs', `Stop error (ignored): ${err}`);
+                    }
+                    this.audioPlayer.stop();
+                }
+                // Reset state for new session
                 this.bytesReceived = 0;
-                this.audioPlayer.stop();
+                this.isPaused = false;
+                this.isStreamReady = false;
+                // Generate new session ID
                 const sessionId = generateSessionId();
                 this.currentSessionId = sessionId;
+                this.log('nodejs', `New session: ${sessionId.slice(0, 8)}...`);
                 this.log('nodejs', `Starting playback: ${message.url}`);
-                this.log('go', `Play command sent (session: ${sessionId.slice(0, 8)}...)`);
-                // Use PCM format for debug playback
-                const command = {
-                    type: 'play',
-                    session_id: sessionId,
-                    url: message.url,
-                    format: 'pcm',
-                };
-                this.socketClient.send(command);
-                ws.send(JSON.stringify({ type: 'session', session_id: sessionId }));
+                // Call API to start playback
+                try {
+                    const result = await this.apiClient.play(sessionId, message.url, 'pcm');
+                    this.log('go', `Play response: ${result.status}`);
+                    ws.send(JSON.stringify({ type: 'session', session_id: sessionId }));
+                }
+                catch (err) {
+                    this.log('nodejs', `Play error: ${err}`);
+                    this.currentSessionId = null;
+                    this.broadcastJson({ type: 'error', session_id: sessionId, message: `${err}` });
+                }
             }
             else if (message.action === 'stop') {
                 if (this.currentSessionId) {
                     this.log('go', 'Stop command sent');
-                    const command = {
-                        type: 'stop',
-                        session_id: this.currentSessionId,
-                    };
-                    this.socketClient.send(command);
+                    try {
+                        await this.apiClient.stop(this.currentSessionId);
+                    }
+                    catch (err) {
+                        this.log('nodejs', `Stop error: ${err}`);
+                    }
                 }
-                this.audioPlayer.stop();
-                this.currentSessionId = null;
+                this.resetPlaybackState();
+                this.broadcastJson({ type: 'stopped' });
             }
-            else if (message.action === 'set_debug') {
-                this.debugMode = !!message.enabled;
-                this.log('nodejs', `Debug mode: ${this.debugMode ? 'ON' : 'OFF'}`);
-                this.broadcastJson({ type: 'debug_mode', enabled: this.debugMode });
+            else if (message.action === 'pause') {
+                if (this.currentSessionId && !this.isPaused) {
+                    this.isPaused = true;
+                    if (this.debugMode) {
+                        this.audioPlayer.stop();
+                    }
+                    try {
+                        await this.apiClient.pause(this.currentSessionId);
+                        this.log('nodejs', 'Playback paused');
+                        this.broadcastJson({ type: 'paused' });
+                    }
+                    catch (err) {
+                        this.log('nodejs', `Pause error: ${err}`);
+                    }
+                }
+            }
+            else if (message.action === 'resume') {
+                if (this.currentSessionId && this.isPaused) {
+                    this.isPaused = false;
+                    if (this.debugMode && this.isStreamReady) {
+                        this.log('nodejs', 'Restarting audio player');
+                        this.audioPlayer.start();
+                    }
+                    try {
+                        await this.apiClient.resume(this.currentSessionId);
+                        this.log('nodejs', 'Playback resumed');
+                        this.broadcastJson({ type: 'resumed' });
+                    }
+                    catch (err) {
+                        this.log('nodejs', `Resume error: ${err}`);
+                    }
+                }
             }
         }
         catch (err) {

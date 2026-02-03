@@ -37,6 +37,8 @@ exports.SocketClient = void 0;
 const net = __importStar(require("net"));
 const events_1 = require("events");
 const SOCKET_PATH = '/tmp/music-playground.sock';
+// SocketClient handles Unix socket connection for receiving audio data.
+// Control commands are now handled via HTTP API (see api-client.ts).
 class SocketClient extends events_1.EventEmitter {
     constructor() {
         super(...arguments);
@@ -49,7 +51,7 @@ class SocketClient extends events_1.EventEmitter {
     connect() {
         return new Promise((resolve, reject) => {
             this.socket = net.createConnection(SOCKET_PATH, () => {
-                console.log('[SocketClient] Connected to Go server');
+                console.log('[SocketClient] Connected to Go server (audio)');
                 this.connected = true;
                 resolve();
             });
@@ -147,13 +149,6 @@ class SocketClient extends events_1.EventEmitter {
                 }
             }
         }
-    }
-    send(command) {
-        if (!this.socket || !this.connected) {
-            throw new Error('Not connected');
-        }
-        const json = JSON.stringify(command);
-        this.socket.write(json);
     }
     disconnect() {
         if (this.socket) {

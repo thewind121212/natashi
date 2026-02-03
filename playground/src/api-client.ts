@@ -1,0 +1,72 @@
+// HTTP client for Go Gin API (control commands)
+
+const GO_API_PORT = process.env.GO_API_PORT || '8180';
+const API_BASE = `http://localhost:${GO_API_PORT}`;
+
+export interface PlayRequest {
+  url: string;
+  format?: 'pcm' | 'webm' | 'raw';
+}
+
+export interface ApiResponse {
+  status: string;
+  session_id: string;
+  message?: string;
+}
+
+export interface StatusResponse {
+  session_id: string;
+  status: string;
+  bytes_sent: number;
+  url?: string;
+}
+
+export class ApiClient {
+  private baseUrl: string;
+
+  constructor(baseUrl: string = API_BASE) {
+    this.baseUrl = baseUrl;
+  }
+
+  async play(sessionId: string, url: string, format: string = 'pcm'): Promise<ApiResponse> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/play`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, format }),
+    });
+    return response.json() as Promise<ApiResponse>;
+  }
+
+  async stop(sessionId: string): Promise<ApiResponse> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/stop`, {
+      method: 'POST',
+    });
+    return response.json() as Promise<ApiResponse>;
+  }
+
+  async pause(sessionId: string): Promise<ApiResponse> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/pause`, {
+      method: 'POST',
+    });
+    return response.json() as Promise<ApiResponse>;
+  }
+
+  async resume(sessionId: string): Promise<ApiResponse> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/resume`, {
+      method: 'POST',
+    });
+    return response.json() as Promise<ApiResponse>;
+  }
+
+  async status(sessionId: string): Promise<StatusResponse> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/status`, {
+      method: 'GET',
+    });
+    return response.json() as Promise<StatusResponse>;
+  }
+
+  async health(): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseUrl}/health`);
+    return response.json() as Promise<{ status: string }>;
+  }
+}

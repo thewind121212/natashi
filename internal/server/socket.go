@@ -10,27 +10,28 @@ import (
 
 const DefaultSocketPath = "/tmp/music-playground.sock"
 
-// Server is the Unix socket server for the audio playground.
-type Server struct {
+// SocketServer is the Unix socket server for audio streaming.
+// It only handles audio output - control is done via HTTP API.
+type SocketServer struct {
 	socketPath string
 	listener   net.Listener
-	handler    *Handler
+	sessions   *SessionManager
 	wg         sync.WaitGroup
 }
 
-// NewServer creates a new Unix socket server.
-func NewServer(socketPath string) *Server {
+// NewSocketServer creates a new Unix socket server.
+func NewSocketServer(socketPath string, sessions *SessionManager) *SocketServer {
 	if socketPath == "" {
 		socketPath = DefaultSocketPath
 	}
-	return &Server{
+	return &SocketServer{
 		socketPath: socketPath,
-		handler:    NewHandler(),
+		sessions:   sessions,
 	}
 }
 
 // Start starts the server and listens for connections.
-func (s *Server) Start(ctx context.Context) error {
+func (s *SocketServer) Start(ctx context.Context) error {
 	// Remove existing socket file if any
 	os.Remove(s.socketPath)
 
@@ -40,7 +41,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to listen on %s: %w", s.socketPath, err)
 	}
 
-	fmt.Printf("[INFO] Server listening on %s\n", s.socketPath)
+	fmt.Printf("[Socket] Listening on %s\n", s.socketPath)
 
 	// Accept connections in background
 	go s.acceptLoop(ctx)
@@ -49,7 +50,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // acceptLoop accepts incoming connections.
-func (s *Server) acceptLoop(ctx context.Context) {
+func (s *SocketServer) acceptLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -61,33 +62,46 @@ func (s *Server) acceptLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					fmt.Printf("[ERROR] Accept failed: %v\n", err)
+					fmt.Printf("[Socket] Accept failed: %v\n", err)
 					continue
 				}
 			}
 
-			fmt.Println("[INFO] Client connected")
+			fmt.Println("[Socket] Client connected")
 			s.wg.Add(1)
 			go func() {
 				defer s.wg.Done()
-				s.handler.HandleConnection(ctx, conn)
-				fmt.Println("[INFO] Client disconnected")
+				s.handleConnection(ctx, conn)
+				fmt.Println("[Socket] Client disconnected")
 			}()
 		}
 	}
 }
 
+// handleConnection handles a single client connection.
+// The connection is used for receiving audio data from sessions.
+func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+
+	// Register this connection with session manager
+	s.sessions.SetConnection(conn)
+	defer s.sessions.SetConnection(nil)
+
+	// Keep connection alive until context is cancelled or connection closes
+	<-ctx.Done()
+}
+
 // Stop stops the server and waits for all connections to close.
-func (s *Server) Stop() {
+func (s *SocketServer) Stop() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
 	s.wg.Wait()
 	os.Remove(s.socketPath)
-	fmt.Println("[INFO] Server stopped")
+	fmt.Println("[Socket] Server stopped")
 }
 
 // SocketPath returns the socket path.
-func (s *Server) SocketPath() string {
+func (s *SocketServer) SocketPath() string {
 	return s.socketPath
 }

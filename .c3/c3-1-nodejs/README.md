@@ -8,75 +8,145 @@ A **Container** is an application or data store - something that needs to be **r
 
 ## Overview
 
-The Node.js Application is the **brain** of the Music Bot system. It handles all Discord interactions, user commands, state management, and coordinates with the Go Audio Application via IPC.
+The Node.js Application is the **gateway** of the Music Bot system. It handles browser/Discord interactions, proxies control commands to Go, and relays audio events back to clients.
 
 | Aspect | Value |
 |--------|-------|
 | **Runtime** | Node.js 20 LTS |
-| **Role** | Discord integration, state management, IPC client |
-| **Process** | Single Node.js process |
-| **Code Location** | `node/src/` |
+| **Role** | Gateway, Discord integration, HTTP/WebSocket server |
+| **HTTP Server** | Express on port 3000 |
+| **Code Location** | `playground/src/` (current), `node/src/` (Discord) |
 
 ## Container Diagram
 
 ```mermaid
 flowchart TB
-    subgraph External["External Systems"]
+    subgraph External["External"]
+        BROWSER[Browser]
         DISCORD[Discord API]
-        USER[Discord User]
     end
 
-    subgraph C3_1["C3-1: Node.js Application"]
-        C101[c3-101<br/>Discord Bot]
-        C102[c3-102<br/>Voice Manager]
-        C103[c3-103<br/>Queue Manager]
-        C104[c3-104<br/>Socket Client]
+    subgraph C3_1["C3-1: Node.js Application :3000"]
+        c3_101[c3-101<br/>Discord Bot]
+        c3_102[c3-102<br/>Voice Manager]
+        c3_103[c3-103<br/>Queue Manager]
+        c3_104[c3-104<br/>API Client]
+        c3_105[c3-105<br/>Socket Client]
+        c3_106[c3-106<br/>Express Server]
+        c3_107[c3-107<br/>WebSocket Handler]
     end
 
     subgraph C3_2["C3-2: Go Audio Application"]
-        GO[Audio Processing]
+        GO_API[Gin API :8180]
+        GO_SOCKET[Unix Socket]
     end
 
-    USER -->|Slash Commands| C101
-    DISCORD <-->|Gateway + Voice| C101
-    C101 --> C102
-    C101 --> C103
-    C102 --> C104
-    C104 <-.->|Unix Socket IPC| GO
+    BROWSER -->|HTTP| c3_106
+    BROWSER <-->|WebSocket| c3_107
+    DISCORD <-->|Gateway| c3_101
+    c3_101 --> c3_102
+    c3_101 --> c3_103
+    c3_102 --> c3_104
+    c3_104 -->|HTTP| GO_API
+    c3_105 <-->|Unix Socket| GO_SOCKET
+    c3_107 <--> c3_105
 ```
-
-## Responsibilities
-
-| Responsibility | Description |
-|----------------|-------------|
-| Discord Integration | Handle slash commands, events, voice connections |
-| State Management | Manage queue state, user sessions |
-| IPC Client | Communicate with Go via Unix sockets |
-| User Feedback | Send embeds, messages back to Discord |
 
 ## Components
 
 | ID | Component | Responsibility | Code Location |
 |----|-----------|----------------|---------------|
-| [c3-101](./c3-101-discord-bot/README.md) | Discord Bot | Slash commands, Discord.js client | `node/src/commands/` |
-| [c3-102](./c3-102-voice-manager/README.md) | Voice Manager | Voice connections, @discordjs/voice | `node/src/voice/` |
-| [c3-103](./c3-103-queue-manager/README.md) | Queue Manager | Playlist state, track queue | `node/src/queue/` |
-| [c3-104](./c3-104-socket-client/README.md) | Socket Client | Unix socket IPC to Go | `node/src/socket/` |
+| c3-101 | Discord Bot | Slash commands, Discord.js | `node/src/commands/` (future) |
+| c3-102 | Voice Manager | Voice connections | `node/src/voice/` (future) |
+| c3-103 | Queue Manager | Playlist state | `node/src/queue/` (future) |
+| c3-104 | API Client | HTTP client to Go API | `playground/src/api-client.ts` |
+| c3-105 | Socket Client | Audio stream receiver | `playground/src/socket-client.ts` |
+| c3-106 | Express Server | HTTP API for browser | `playground/src/server.ts` |
+| c3-107 | WebSocket Handler | Real-time browser events | `playground/src/websocket.ts` |
 
 ## Component Interactions
 
 ```mermaid
 flowchart LR
-    C101[c3-101<br/>Discord Bot]
-    C102[c3-102<br/>Voice Manager]
-    C103[c3-103<br/>Queue Manager]
-    C104[c3-104<br/>Socket Client]
+    c3_106[c3-106<br/>Express]
+    c3_107[c3-107<br/>WebSocket]
+    c3_104[c3-104<br/>API Client]
+    c3_105[c3-105<br/>Socket Client]
 
-    C101 -->|"joinVoice()"| C102
-    C101 -->|"addTrack()"| C103
-    C103 -->|"getNext()"| C101
-    C102 -->|"sendCommand()"| C104
-    C104 -->|"onAudioFrame()"| C102
+    c3_106 -->|"proxy"| c3_104
+    c3_107 -->|"control"| c3_104
+    c3_107 <-->|"audio/events"| c3_105
+```
+
+## HTTP Endpoints (c3-106)
+
+```mermaid
+flowchart LR
+    subgraph Endpoints["Express API :3000"]
+        PLAY["POST /api/session/:id/play"]
+        STOP["POST /api/session/:id/stop"]
+        PAUSE["POST /api/session/:id/pause"]
+        RESUME["POST /api/session/:id/resume"]
+        STATUS["GET /api/session/:id/status"]
+        HEALTH["GET /api/go/health"]
+    end
+```
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/session/:id/play` | POST | Proxy to Go - start playback |
+| `/api/session/:id/stop` | POST | Proxy to Go - stop playback |
+| `/api/session/:id/pause` | POST | Proxy to Go - pause |
+| `/api/session/:id/resume` | POST | Proxy to Go - resume |
+| `/api/session/:id/status` | GET | Proxy to Go - get status |
+| `/api/go/health` | GET | Check Go API health |
+
+## WebSocket Protocol (c3-107)
+
+### Messages from Browser
+
+```json
+{"action": "play", "url": "https://youtube.com/..."}
+{"action": "stop"}
+{"action": "pause"}
+{"action": "resume"}
+```
+
+### Messages to Browser
+
+```json
+{"type": "state", "debugMode": true, "isPlaying": false}
+{"type": "session", "session_id": "abc123"}
+{"type": "ready", "session_id": "abc123"}
+{"type": "progress", "bytes": 12345, "playback_secs": 10.5}
+{"type": "finished", "session_id": "abc123", "bytes": 54321}
+{"type": "paused"}
+{"type": "resumed"}
+{"type": "stopped"}
+{"type": "error", "message": "..."}
+{"type": "log", "source": "go|nodejs", "message": "..."}
+```
+
+## Data Flow (Playground)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant WS as c3-107<br/>WebSocket
+    participant API as c3-104<br/>API Client
+    participant SC as c3-105<br/>Socket Client
+    participant GO as C3-2<br/>Go
+
+    B->>WS: {action: "play", url}
+    WS->>API: play(sessionId, url)
+    API->>GO: POST /session/:id/play
+    GO-->>API: {status: "playing"}
+    GO-->>SC: {type: "ready"}
+    SC-->>WS: event
+    WS-->>B: {type: "ready"}
+    GO-->>SC: audio chunks
+    SC-->>WS: audio data
+    WS-->>B: {type: "progress"}
 ```
 
 ## Technology Stack
@@ -85,87 +155,59 @@ flowchart LR
 |------------|---------|---------|
 | Node.js | 20 LTS | Runtime |
 | TypeScript | 5.x | Language |
-| discord.js | v14 | Discord API |
-| @discordjs/voice | latest | Voice connections |
-| @discordjs/opus | latest | Opus encoding |
+| Express | 4.x | HTTP server |
+| ws | 8.x | WebSocket |
+| discord.js | v14 | Discord API (future) |
 
 ## Directory Structure
 
 ```
-node/
-├── src/
-│   ├── index.ts          # Entry point
-│   ├── commands/         # c3-101: Slash commands
-│   │   ├── play.ts
-│   │   ├── pause.ts
-│   │   ├── stop.ts
-│   │   └── ...
-│   ├── voice/            # c3-102: Voice management
-│   │   ├── connection.ts
-│   │   └── player.ts
-│   ├── queue/            # c3-103: Queue management
-│   │   └── manager.ts
-│   └── socket/           # c3-104: IPC client
-│       ├── client.ts
-│       ├── commands.ts
-│       └── audio.ts
-├── package.json
-└── tsconfig.json
+playground/src/
+├── index.ts           # Entry point
+├── server.ts          # c3-106: Express server
+├── websocket.ts       # c3-107: WebSocket handler
+├── api-client.ts      # c3-104: Go API client
+├── socket-client.ts   # c3-105: Socket client
+└── audio-player.ts    # Debug audio output
+
+playground/client/src/
+├── App.tsx            # React main component
+└── hooks/
+    └── useWebSocket.ts  # React WebSocket hook
 ```
 
 ## Communication with Go Application
 
-### IPC Protocol
+### Control Plane (HTTP)
 
-This container communicates with [C3-2: Go Audio Application](../c3-2-go-audio/README.md) via Unix sockets:
-
-| Socket | Direction | Format | Purpose |
-|--------|-----------|--------|---------|
-| `/tmp/music.sock` | Bidirectional | JSON | Commands and events |
-| `/tmp/music-audio.sock` | Go → Node | Binary | Audio frames |
-
-### Commands Sent (Node → Go)
-
-```json
-{"type": "play", "channel_id": "123", "url": "https://..."}
-{"type": "pause", "channel_id": "123"}
-{"type": "resume", "channel_id": "123"}
-{"type": "stop", "channel_id": "123"}
-{"type": "volume", "channel_id": "123", "level": 0.8}
-```
-
-### Events Received (Go → Node)
-
-```json
-{"type": "ready", "channel_id": "123", "duration": 240}
-{"type": "finished", "channel_id": "123"}
-{"type": "error", "channel_id": "123", "message": "..."}
-```
-
-## Data Flow
+Node.js proxies control commands to Go API:
 
 ```mermaid
-sequenceDiagram
-    participant U as User
-    participant C101 as c3-101<br/>Discord Bot
-    participant C103 as c3-103<br/>Queue Manager
-    participant C102 as c3-102<br/>Voice Manager
-    participant C104 as c3-104<br/>Socket Client
-    participant GO as C3-2<br/>Go Audio
-
-    U->>C101: /play <url>
-    C101->>C103: addTrack(url)
-    C101->>C102: joinVoice(channelId)
-    C102->>C104: sendCommand(play)
-    C104->>GO: {"type":"play",...}
-    GO-->>C104: {"type":"ready",...}
-    GO-->>C104: audio frames
-    C104-->>C102: onAudioFrame()
-    C102-->>U: Audio in voice channel
+flowchart LR
+    BROWSER[Browser] -->|HTTP :3000| EXPRESS[Express]
+    EXPRESS -->|HTTP :8180| GIN[Gin API]
 ```
+
+### Data Plane (Socket)
+
+Node.js receives audio/events from Go:
+
+```mermaid
+flowchart LR
+    GO[Go Session] -->|Binary + JSON| SOCKET[Unix Socket]
+    SOCKET -->|Events| NODE[Node.js]
+    NODE -->|WebSocket| BROWSER[Browser]
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GO_API_PORT` | `8180` | Go API port to connect to |
+| `DEBUG_AUDIO` | `0` | Enable audio playback to speakers |
 
 ## See Also
 
-- [C3-2: Go Audio Application](../c3-2-go-audio/README.md) - The other container
+- [C3-2: Go Audio Application](../c3-2-go-audio/README.md) - Audio processing container
 - [C3-0: Context](../c3-0-context/README.md) - System context
 - [Components Overview](./COMPONENTS.md) - Detailed component documentation

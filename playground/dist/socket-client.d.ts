@@ -1,10 +1,4 @@
 import { EventEmitter } from 'events';
-export interface Command {
-    type: 'play' | 'stop';
-    session_id: string;
-    url?: string;
-    format?: 'pcm' | 'webm' | 'raw';
-}
 export interface Event {
     type: 'ready' | 'error' | 'finished';
     session_id: string;
@@ -20,7 +14,6 @@ export declare class SocketClient extends EventEmitter {
     connect(): Promise<void>;
     private handleData;
     private processBuffer;
-    send(command: Command): void;
     disconnect(): void;
     isConnected(): boolean;
 }

@@ -24,21 +24,25 @@ flowchart TB
             C101[c3-101 Discord Bot]
             C102[c3-102 Voice Manager]
             C103[c3-103 Queue Manager]
-            C104[c3-104 Socket Client]
+            C104[c3-104 API Client]
+            C105[c3-105 Socket Client]
         end
 
-        subgraph C3_2["C3-2: Go Audio Application"]
-            C201[c3-201 Audio Processor]
-            C202[c3-202 Stream Extractor]
-            C203[c3-203 Opus Encoder]
-            C204[c3-204 Jitter Buffer]
+        subgraph C3_2["C3-2: Go Audio Application :8180"]
+            C201[c3-201 Gin API Server]
+            C202[c3-202 Session Manager]
+            C203[c3-203 Stream Extractor]
+            C204[c3-204 Opus Encoder]
+            C205[c3-205 Jitter Buffer]
+            C206[c3-206 Socket Server]
         end
     end
 
     C101 --> C102 --> C104
     C101 --> C103
-    C104 <--> C201
-    C201 --> C202 --> C203 --> C204
+    C104 -->|HTTP :8180| C201
+    C105 <-->|Unix Socket| C206
+    C201 --> C202 --> C203 --> C204 --> C205 --> C206
 ```
 
 **C3 Documentation:** `.c3/` folder contains full architecture details.
@@ -85,14 +89,18 @@ flowchart LR
 | Discord commands | c3-101 Discord Bot | C3-1 Node.js |
 | Voice connections | c3-102 Voice Manager | C3-1 Node.js |
 | Queue/playlist logic | c3-103 Queue Manager | C3-1 Node.js |
-| IPC protocol | c3-104 Socket Client + c3-201 Audio Processor | Both |
-| Stream extraction | c3-202 Stream Extractor | C3-2 Go |
-| Audio encoding | c3-203 Opus Encoder | C3-2 Go |
-| Audio buffering | c3-204 Jitter Buffer | C3-2 Go |
+| HTTP API control | c3-104 API Client + c3-201 Gin API | Both |
+| Audio streaming | c3-105 Socket Client + c3-206 Socket Server | Both |
+| Session management | c3-202 Session Manager | C3-2 Go |
+| Stream extraction | c3-203 Stream Extractor | C3-2 Go |
+| Audio encoding | c3-204 Opus Encoder | C3-2 Go |
+| Smooth playback | c3-205 Jitter Buffer | C3-2 Go |
 
 3. **Scan repo for existing patterns:**
-   - `node/src/` - Node.js layer
-   - `go/internal/` - Go layer
+   - `playground/src/` - Node.js backend (current)
+   - `playground/client/src/` - React frontend
+   - `internal/` - Go layer
+   - `cmd/playground/` - Go entry point
    - Find similar implementations
 
 4. **Collect evidence links** (file paths + key snippets or line refs if available)

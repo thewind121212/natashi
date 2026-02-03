@@ -2,112 +2,161 @@
 
 ## System Overview
 
-Discord Music Bot with Lavalink-quality audio streaming. Hybrid architecture using Node.js for Discord integration and Go for high-performance audio processing.
+Discord Music Bot with **Lavalink-quality audio streaming**. Hybrid architecture using Node.js for Discord integration and Go for high-performance audio processing.
+
+**Goal**: No lagging, smooth transmission, Opus encoding, 48kHz stereo.
+
+## C3 Architecture (Based on C4 Model)
+
+| Level | C4 Name | What It Represents | In This System |
+|-------|---------|-------------------|----------------|
+| **C3-0** | Software System | The whole system | Music Bot |
+| **C3-1, C3-2** | Container | Running process | Node.js, Go |
+| **C3-1XX, C3-2XX** | Component | Logical grouping | Discord Bot, Opus Encoder, etc. |
+
+> **Container ≠ Docker**. A C4 Container is a **running application**.
+
+## Container Diagram
 
 ```mermaid
 flowchart TB
     subgraph External["External Systems"]
         DISCORD[Discord API]
         YOUTUBE[YouTube]
-        USER[Discord User]
     end
 
-    subgraph System["Music Bot System (C3-0)"]
-        subgraph C3_1["C3-1: Node.js Application"]
-            BOT[Discord Bot]
-            VOICE[Voice Manager]
-            QUEUE[Queue Manager]
-            SOCKET_C[Socket Client]
-        end
-
-        subgraph IPC["IPC Layer"]
-            CMD_SOCK[Command Socket<br/>/tmp/music.sock]
-            AUDIO_SOCK[Audio Socket<br/>/tmp/music-audio.sock]
-        end
-
-        subgraph C3_2["C3-2: Go Audio Application"]
-            PROCESSOR[Audio Processor]
-            EXTRACTOR[Stream Extractor]
-            ENCODER[Opus Encoder]
-            BUFFER[Jitter Buffer]
-        end
+    subgraph C3_1["C3-1: Node.js Application"]
+        c3_101[c3-101 Discord Bot]
+        c3_102[c3-102 Voice Manager]
+        c3_103[c3-103 Queue Manager]
+        c3_104[c3-104 API Client]
+        c3_105[c3-105 Socket Client]
     end
 
-    USER -->|Slash Commands| BOT
-    DISCORD <-->|Gateway + Voice| BOT
-    YOUTUBE -->|Stream URL| EXTRACTOR
+    subgraph C3_2["C3-2: Go Audio Application :8180"]
+        c3_201[c3-201 Gin API Server]
+        c3_202[c3-202 Session Manager]
+        c3_203[c3-203 Stream Extractor]
+        c3_204[c3-204 Opus Encoder]
+        c3_205[c3-205 Jitter Buffer]
+        c3_206[c3-206 Socket Server]
+    end
 
-    BOT --> VOICE
-    BOT --> QUEUE
-    VOICE --> SOCKET_C
-
-    SOCKET_C <--> CMD_SOCK
-    SOCKET_C <--> AUDIO_SOCK
-
-    CMD_SOCK <--> PROCESSOR
-    AUDIO_SOCK <--> BUFFER
-
-    PROCESSOR --> EXTRACTOR
-    EXTRACTOR --> ENCODER
-    ENCODER --> BUFFER
+    DISCORD <-->|Gateway + Voice| c3_101
+    c3_101 --> c3_102 --> c3_104
+    c3_101 --> c3_103
+    c3_104 -->|HTTP :8180| c3_201
+    c3_105 <-->|Unix Socket| c3_206
+    c3_201 --> c3_202
+    c3_202 --> c3_203 -->|yt-dlp| YOUTUBE
+    c3_203 --> c3_204 --> c3_205 --> c3_206
 ```
 
-## C3 Architecture (Based on C4 Model)
+## Audio Pipeline (Format Option)
 
-C3 (Context → Container → Component) adapts the C4 model, excluding the Code level:
+```mermaid
+flowchart LR
+    subgraph Extract["c3-203"]
+        YT[yt-dlp]
+    end
 
-| Level | C4 Name | What It Represents | In This System |
-|-------|---------|-------------------|----------------|
-| **C3-0** | Software System | The whole system delivering value | Music Bot |
-| **C3-1, C3-2** | Container | Running application/process | Node.js App, Go App |
-| **C3-1XX, C3-2XX** | Component | Logical grouping within container | Discord Bot, Encoder, etc. |
+    subgraph Encode["c3-204"]
+        FF[FFmpeg]
+        FORMAT{Format?}
+        PCM[PCM s16le]
+        OPUS[Opus]
+    end
 
-> **Important:** Container ≠ Docker container. A C4 Container is a **running application** (Node.js process, Go process). Docker is deployment infrastructure.
+    subgraph Buffer["c3-205"]
+        JIT[Jitter Buffer]
+    end
 
+    subgraph Output["c3-206"]
+        SOCK[Unix Socket]
+    end
+
+    YT --> FF --> FORMAT
+    FORMAT -->|pcm| PCM --> JIT
+    FORMAT -->|opus| OPUS --> JIT
+    JIT --> SOCK
 ```
-C3-0: Context (Software System)
- ├── C3-1: Node.js Application (Container)
- │    ├── c3-101 Discord Bot (Component)
- │    ├── c3-102 Voice Manager (Component)
- │    ├── c3-103 Queue Manager (Component)
- │    └── c3-104 Socket Client (Component)
- │
- └── C3-2: Go Audio Application (Container)
-      ├── c3-201 Audio Processor (Component)
-      ├── c3-202 Stream Extractor (Component)
-      ├── c3-203 Opus Encoder (Component)
-      └── c3-204 Jitter Buffer (Component)
+
+| Format | Use Case | Output |
+|--------|----------|--------|
+| `pcm` | Playground debug | macOS speakers |
+| `opus` | Discord production | Voice channel UDP |
+
+## Control Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as Browser/Discord
+    participant Node as Node.js
+    participant Gin as Gin :8180
+    participant Session as Session Manager
+    participant Socket as Unix Socket
+
+    Client->>Node: play(url, format)
+    Node->>Gin: POST /session/:id/play
+    Gin->>Session: StartPlayback()
+    Session-->>Socket: Audio (pcm/opus)
+    Socket-->>Node: Stream
+    Node-->>Client: Audio output
 ```
 
-## Key Characteristics
+## Components
 
-| Aspect | Description |
-|--------|-------------|
-| **Architecture** | Hybrid Node.js + Go, two runtime processes |
-| **Audio Quality** | 48kHz stereo, 20ms Opus frames, 128kbps |
-| **Latency** | <20ms Discord transfer |
-| **Concurrency** | Worker pool supporting 60 channels |
-| **IPC** | Unix sockets for minimal latency |
+### C3-1: Node.js Application
+
+| ID | Component | Responsibility |
+|----|-----------|----------------|
+| c3-101 | Discord Bot | Slash commands, events |
+| c3-102 | Voice Manager | @discordjs/voice, UDP |
+| c3-103 | Queue Manager | Playlist state |
+| c3-104 | API Client | HTTP to Gin :8180 |
+| c3-105 | Socket Client | Audio stream receiver |
+
+### C3-2: Go Audio Application
+
+| ID | Component | Responsibility |
+|----|-----------|----------------|
+| c3-201 | Gin API Server | HTTP control endpoints |
+| c3-202 | Session Manager | Lifecycle, pause/resume, worker pool |
+| c3-203 | Stream Extractor | yt-dlp integration |
+| c3-204 | Opus Encoder | FFmpeg + libopus, format options |
+| c3-205 | Jitter Buffer | Smooth frame delivery (3-5 frames) |
+| c3-206 | Socket Server | Audio output to Node.js |
+
+## API Endpoints (Gin :8180)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/session/:id/play` | POST | Start `{url, format}` |
+| `/session/:id/stop` | POST | Stop session |
+| `/session/:id/pause` | POST | Pause (keep FFmpeg) |
+| `/session/:id/resume` | POST | Resume |
+| `/session/:id/status` | GET | Get state |
+| `/health` | GET | Health check |
+
+## Audio Quality (Lavalink Target)
+
+| Spec | Value |
+|------|-------|
+| Sample Rate | 48000 Hz |
+| Channels | 2 (stereo) |
+| Frame Size | 20ms (960 samples) |
+| Bitrate | 128 kbps VBR |
+| Jitter Buffer | 3-5 frames (60-100ms) |
 
 ## Technology Stack
 
-| Container | Technology | Purpose |
-|-----------|------------|---------|
-| C3-1 Node.js | Node.js 20 + discord.js v14 | Discord integration |
-| C3-2 Go | Go 1.21+ + FFmpeg + yt-dlp | Audio processing |
-| Deployment | Docker (Alpine base) | Container runtime |
+| Container | Technology |
+|-----------|------------|
+| C3-1 Node.js | Node.js 20, discord.js v14, @discordjs/voice |
+| C3-2 Go | Go 1.21+, Gin, FFmpeg, libopus, yt-dlp |
 
 ## Quick Links
 
-### Architecture Levels
-- [C3-0: Context](./c3-0-context/README.md) - System boundaries and external actors
-- [C3-1: Node.js Application](./c3-1-nodejs/README.md) - Discord integration container
-- [C3-2: Go Audio Application](./c3-2-go-audio/README.md) - Audio processing container
-
-### Component Documentation
-- [Node.js Components (c3-1XX)](./c3-1-nodejs/COMPONENTS.md)
-- [Go Components (c3-2XX)](./c3-2-go-audio/COMPONENTS.md)
-
-### Reference
-- [Table of Contents](./TOC.md) - Complete documentation index
-- [Architecture Decisions](./adr/) - ADRs for key decisions
+- [C3-0: Context](./c3-0-context/README.md)
+- [C3-1: Node.js Application](./c3-1-nodejs/README.md)
+- [C3-2: Go Audio Application](./c3-2-go-audio/README.md)

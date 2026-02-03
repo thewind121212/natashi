@@ -3,7 +3,9 @@ import type { LogEntry } from '@/components/LogViewer';
 
 interface WebSocketMessage {
   type: string;
-  enabled?: boolean;
+  debugMode?: boolean;
+  isPaused?: boolean;
+  isPlaying?: boolean;
   session_id?: string;
   message?: string;
   bytes?: number;
@@ -14,13 +16,15 @@ interface WebSocketMessage {
 interface UseWebSocketReturn {
   isConnected: boolean;
   debugMode: boolean;
+  isPaused: boolean;
   status: string;
   statusType: 'normal' | 'error' | 'success';
   isPlaying: boolean;
   logs: LogEntry[];
   play: (url: string) => void;
   stop: () => void;
-  setDebugMode: (enabled: boolean) => void;
+  pause: () => void;
+  resume: () => void;
   clearLogs: () => void;
 }
 
@@ -43,14 +47,12 @@ export function useWebSocket(): UseWebSocketReturn {
   const mountedRef = useRef(true);
 
   const [isConnected, setIsConnected] = useState(false);
-  const [debugMode, setDebugModeState] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [status, setStatus] = useState('Ready. Paste a YouTube URL and click Play.');
   const [statusType, setStatusType] = useState<'normal' | 'error' | 'success'>('normal');
   const [isPlaying, setIsPlaying] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-
-  const debugModeRef = useRef(debugMode);
-  debugModeRef.current = debugMode;
 
   const addLog = useCallback((source: 'go' | 'nodejs', message: string) => {
     if (!mountedRef.current) return;
@@ -79,22 +81,23 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     switch (msg.type) {
-      case 'debug_mode':
-        setDebugModeState(!!msg.enabled);
+      case 'state':
+        // Initial state from server
+        setDebugMode(!!msg.debugMode);
+        setIsPaused(!!msg.isPaused);
+        setIsPlaying(!!msg.isPlaying);
         break;
 
       case 'session':
         updateStatus('Extracting audio...');
         addLog('nodejs', `Session started: ${msg.session_id}`);
+        setIsPlaying(true);
+        setIsPaused(false);
         break;
 
       case 'ready': {
         const readyTime = playStartTimeRef.current ? Date.now() - playStartTimeRef.current : 0;
-        if (debugModeRef.current) {
-          updateStatus('▶ Playing (ready in ' + readyTime + 'ms)', 'success');
-        } else {
-          updateStatus('Streaming... (debug OFF - no audio)', 'success');
-        }
+        updateStatus('▶ Playing (ready in ' + readyTime + 'ms)', 'success');
         setIsPlaying(true);
         addLog('nodejs', `Stream ready (${readyTime}ms)`);
         break;
@@ -102,17 +105,14 @@ export function useWebSocket(): UseWebSocketReturn {
 
       case 'progress': {
         const playbackTime = formatTime(msg.playback_secs || 0);
-        if (debugModeRef.current) {
-          updateStatus('▶ ' + playbackTime + ' buffered | ' + formatBytes(msg.bytes || 0), 'success');
-        } else {
-          updateStatus(playbackTime + ' buffered | ' + formatBytes(msg.bytes || 0), 'success');
-        }
+        updateStatus('▶ ' + playbackTime + ' | ' + formatBytes(msg.bytes || 0), 'success');
         break;
       }
 
       case 'error':
         updateStatus('Error: ' + msg.message, 'error');
         setIsPlaying(false);
+        setIsPaused(false);
         playStartTimeRef.current = null;
         addLog('nodejs', `Error: ${msg.message}`);
         break;
@@ -123,16 +123,29 @@ export function useWebSocket(): UseWebSocketReturn {
           : '?';
         updateStatus('✓ Finished in ' + totalTime + 's | Total: ' + formatBytes(msg.bytes || 0));
         setIsPlaying(false);
+        setIsPaused(false);
         playStartTimeRef.current = null;
         addLog('nodejs', `Finished (${totalTime}s, ${formatBytes(msg.bytes || 0)})`);
         break;
       }
 
+      case 'stopped':
       case 'player_stopped':
         updateStatus('Playback stopped');
         setIsPlaying(false);
+        setIsPaused(false);
         playStartTimeRef.current = null;
         addLog('nodejs', 'Playback stopped');
+        break;
+
+      case 'paused':
+        setIsPaused(true);
+        updateStatus('⏸ Paused', 'normal');
+        break;
+
+      case 'resumed':
+        setIsPaused(false);
+        updateStatus('▶ Resumed', 'success');
         break;
     }
   }, [addLog, updateStatus]);
@@ -154,7 +167,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
       // Close existing connection
       if (ws) {
-        ws.onclose = null; // Prevent reconnect on intentional close
+        ws.onclose = null;
         ws.close();
       }
 
@@ -213,7 +226,7 @@ export function useWebSocket(): UseWebSocketReturn {
       }
       wsRef.current = null;
     };
-  }, []); // Empty deps - only run once
+  }, []);
 
   const play = useCallback((url: string) => {
     if (!url.trim()) {
@@ -227,7 +240,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     playStartTimeRef.current = Date.now();
-    updateStatus('Starting... (0ms)');
+    updateStatus('Starting...');
     addLog('nodejs', `Play requested: ${url.trim()}`);
     wsRef.current.send(JSON.stringify({
       action: 'play',
@@ -241,12 +254,15 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', 'Stop requested');
   }, [updateStatus, addLog]);
 
-  const setDebugMode = useCallback((enabled: boolean) => {
-    wsRef.current?.send(JSON.stringify({
-      action: 'set_debug',
-      enabled,
-    }));
-  }, []);
+  const pause = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'pause' }));
+    addLog('nodejs', 'Pause requested');
+  }, [addLog]);
+
+  const resume = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'resume' }));
+    addLog('nodejs', 'Resume requested');
+  }, [addLog]);
 
   const clearLogs = useCallback(() => {
     setLogs([]);
@@ -255,13 +271,15 @@ export function useWebSocket(): UseWebSocketReturn {
   return {
     isConnected,
     debugMode,
+    isPaused,
     status,
     statusType,
     isPlaying,
     logs,
     play,
     stop,
-    setDebugMode,
+    pause,
+    resume,
     clearLogs,
   };
 }

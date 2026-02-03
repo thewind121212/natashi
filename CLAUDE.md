@@ -2,133 +2,191 @@
 
 ## What This Project Is
 
-Discord music bot with Lavalink-quality audio streaming. Hybrid Node.js + Go architecture.
+Discord music bot with **Lavalink-quality audio streaming**. Hybrid Node.js + Go architecture.
 
-**Why hybrid?**
-- Node.js: Discord API requires it (discord.js ecosystem)
-- Go: Audio processing needs high-performance concurrency
+**Goal**: Stream YouTube audio to Discord voice channels with:
+- No lagging
+- Smooth transmission (jitter buffer)
+- Opus encoding (Discord native)
+- 48kHz stereo, 20ms frames
 
 ## Architecture (C3 Model)
 
-```
-C3-0: Music Bot System
-├── C3-1: Node.js Application (Discord Brain)
-│   ├── c3-101 Discord Bot      - Slash commands
-│   ├── c3-102 Voice Manager    - Voice connections
-│   ├── c3-103 Queue Manager    - Playlist state
-│   └── c3-104 Socket Client    - IPC to Go
-│
-└── C3-2: Go Audio Application (Audio Powerhouse)
-    ├── c3-201 Audio Processor  - Worker pool, socket server
-    ├── c3-202 Stream Extractor - yt-dlp integration
-    ├── c3-203 Opus Encoder     - FFmpeg + Opus encoding
-    └── c3-204 Jitter Buffer    - Frame smoothing
+```mermaid
+flowchart TB
+    subgraph C3_0["C3-0: Music Bot System"]
+        subgraph C3_1["C3-1: Node.js Application"]
+            c3_101[c3-101 Discord Bot]
+            c3_102[c3-102 Voice Manager]
+            c3_103[c3-103 Queue Manager]
+            c3_104[c3-104 API Client]
+            c3_105[c3-105 Socket Client]
+        end
+
+        subgraph C3_2["C3-2: Go Audio Application"]
+            c3_201[c3-201 Gin API Server]
+            c3_202[c3-202 Session Manager]
+            c3_203[c3-203 Stream Extractor]
+            c3_204[c3-204 Opus Encoder]
+            c3_205[c3-205 Jitter Buffer]
+            c3_206[c3-206 Socket Server]
+        end
+    end
+
+    c3_104 -->|HTTP :8180| c3_201
+    c3_105 <-->|Unix Socket| c3_206
+    c3_201 --> c3_202
+    c3_202 --> c3_203 --> c3_204 --> c3_205 --> c3_206
 ```
 
-**IPC**: Unix sockets (`/tmp/music.sock` for commands, `/tmp/music-audio.sock` for audio)
+## Audio Pipeline (Format Option)
+
+```mermaid
+flowchart LR
+    subgraph Go["Go Audio Application"]
+        YT[yt-dlp] --> FF[FFmpeg Decode]
+        FF --> SAMPLE[48kHz Stereo]
+        SAMPLE --> FORMAT{Format?}
+        FORMAT -->|pcm| PCM[PCM s16le]
+        FORMAT -->|opus| OPUS[Opus Encode]
+        PCM --> JITTER[Jitter Buffer]
+        OPUS --> JITTER
+        JITTER --> SOCKET[Unix Socket]
+    end
+
+    subgraph Node["Node.js"]
+        SOCKET --> ROUTE{Route?}
+        ROUTE -->|Playground| SPEAKER[macOS Speakers]
+        ROUTE -->|Discord| VOICE[Discord Voice UDP]
+    end
+```
+
+## Control Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as Browser/Discord Bot
+    participant Node as Node.js
+    participant Gin as Gin API :8180
+    participant Session as Session Manager
+    participant Socket as Unix Socket
+
+    Client->>Node: play(url, format)
+    Node->>Gin: POST /session/:id/play {url, format}
+    Gin->>Session: StartPlayback(id, url, format)
+    Session-->>Socket: Audio chunks (pcm/opus)
+    Socket-->>Node: Stream audio
+    Node-->>Client: Audio (speaker/Discord)
+```
+
+## API Endpoints (Gin :8180)
+
+| Endpoint | Method | Body | Description |
+|----------|--------|------|-------------|
+| `/session/:id/play` | POST | `{url, format}` | Start playback (format: pcm/opus/webm) |
+| `/session/:id/stop` | POST | - | Stop & kill FFmpeg |
+| `/session/:id/pause` | POST | - | Pause (FFmpeg keeps running) |
+| `/session/:id/resume` | POST | - | Resume streaming |
+| `/session/:id/status` | GET | - | Get session state |
+| `/health` | GET | - | Health check |
+
+## Audio Formats
+
+| Format | Use Case | Output |
+|--------|----------|--------|
+| `pcm` | Playground debug | Raw PCM s16le → macOS speakers |
+| `opus` | Discord production | Opus frames → Discord voice UDP |
+| `webm` | Browser (future) | WebM container |
 
 ## Current State
 
-### Implemented (Go CLI POC)
-- `main.go` - Entry point: extract YouTube → play via FFmpeg
-- `internal/platform/youtube/` - yt-dlp extraction (works)
-- `internal/player/ffmpeg/` - Direct playback to macOS AudioToolbox
-- `pkg/deps/checker.go` - Dependency verification
+| Component | Status | Location |
+|-----------|--------|----------|
+| Gin API Server | ✅ Done | `internal/server/api.go` |
+| Session Manager | ✅ Done | `internal/server/session.go` |
+| Stream Extractor | ✅ Done | `internal/platform/youtube/` |
+| FFmpeg Pipeline | ✅ Done | `internal/encoder/ffmpeg.go` |
+| Socket Server | ✅ Done | `internal/server/socket.go` |
+| Node.js Gateway | ✅ Done | `playground/src/` |
+| React Playground | ✅ Done | `playground/client/` |
 
-### Not Yet Built
-- Full Node.js Discord bot
-- Socket server / IPC layer
-- Opus encoding pipeline
-- Worker pool
-- Jitter buffer
+### TODO (for Lavalink quality)
 
-## Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| Discord integration | Node.js 20 + discord.js v14 |
-| Audio processing | Go 1.21+ |
-| Stream extraction | yt-dlp |
-| Audio decoding | FFmpeg |
-| Opus encoding | FFmpeg libopus |
-
-## Key Documentation
-
-| Path | What |
-|------|------|
-| `.c3/README.md` | Architecture overview |
-| `.c3/c3-1-nodejs/` | Node.js container docs |
-| `.c3/c3-2-go-audio/` | Go container docs |
-| `docs/stories/` | Feature stories |
-| `docs/plans/` | Implementation plans |
+| Component | Priority | Description |
+|-----------|----------|-------------|
+| **Jitter Buffer** | HIGH | Smooth frame delivery (3-5 frames) |
+| **Worker Pool** | HIGH | Concurrent channel support (60+) |
+| **Opus Tuning** | HIGH | Optimize encoding settings |
+| Discord Bot | MEDIUM | discord.js integration |
+| Voice Manager | MEDIUM | @discordjs/voice |
 
 ## Audio Quality Specs
 
-| Spec | Value |
-|------|-------|
-| Sample Rate | 48000 Hz |
-| Channels | 2 (stereo) |
-| Frame Size | 20ms (960 samples) |
-| Bitrate | 128 kbps VBR |
-| Format | Opus |
+| Spec | Value | Why |
+|------|-------|-----|
+| Sample Rate | 48000 Hz | Discord native |
+| Channels | 2 (stereo) | Full quality |
+| Frame Size | 20ms (960 samples) | Discord Opus requirement |
+| Bitrate | 128 kbps VBR | Good quality |
+| Jitter Buffer | 3-5 frames (60-100ms) | Smooth playback |
 
-## Current Work in Progress
-
-### Audio Test Playground
-
-Building a web-based audio testing tool before Discord integration.
-
-**Story**: `docs/stories/2026-02-02-audio-test-playground.md`
-**Plan**: `docs/plans/adr-20260202-audio-test-playground/`
-
-**Key design**: Single Opus encoder with format flag:
-```
-                                    ┌─→ format="raw"  → Discord-ready
-YouTube → FFmpeg → Opus Encoder ────┤
-                                    └─→ format="webm" → Browser-playable
-```
-
-**Phases**:
-1. Go Encoder (`internal/encoder/`)
-2. Go Server (`internal/server/`, `cmd/playground/`)
-3. Node.js (`playground/src/`)
-4. Browser UI (`playground/public/`)
-5. Integration testing
-
-## How to Run (Current POC)
+## How to Run
 
 ```bash
-# Check dependencies
-which yt-dlp ffmpeg
+# Run playground (debug - audio plays to speakers)
+task run:debug
 
-# Run CLI (plays to local speaker)
-go run main.go "https://youtube.com/watch?v=..."
+# Run playground (no audio)
+task run
+
+# Build
+task build
+
+# Kill servers
+task kill
 ```
+
+**URLs:**
+- React UI: http://localhost:5173
+- Node.js: http://localhost:3000
+- Go API: http://localhost:8180
 
 ## Directory Structure
 
 ```
-music-bot/
-├── main.go                    # Current CLI entry
-├── cmd/                       # Command entry points
-│   └── cli.go                 # CLI argument parsing
+natashi/
+├── cmd/playground/main.go     # Entry point
 ├── internal/
-│   ├── platform/              # Stream extraction
-│   │   ├── platform.go        # Registry + interface
-│   │   └── youtube/           # YouTube extractor
-│   └── player/                # Audio playback
-│       ├── player.go          # Interface
-│       └── ffmpeg/            # FFmpeg player
-├── pkg/deps/                  # Dependency checker
+│   ├── server/
+│   │   ├── api.go             # Gin handlers
+│   │   ├── router.go          # Gin routes
+│   │   ├── session.go         # Session manager
+│   │   └── socket.go          # Socket server
+│   ├── encoder/
+│   │   └── ffmpeg.go          # FFmpeg + format options
+│   ├── buffer/                # Jitter buffer (TODO)
+│   └── platform/youtube/      # yt-dlp extractor
+├── playground/
+│   ├── src/                   # Node.js gateway
+│   │   ├── api-client.ts      # Gin API client
+│   │   ├── socket-client.ts   # Audio receiver
+│   │   └── websocket.ts       # Browser handler
+│   └── client/                # React UI
 ├── .c3/                       # Architecture docs
-├── docs/
-│   ├── stories/               # Feature stories
-│   └── plans/                 # Implementation plans
-└── playground/                # (to be created) Web test UI
+└── Taskfile.yml
 ```
 
-## Design Principles
+## Environment Variables
 
-- **C3 Architecture**: Context → Container → Component (from C4)
-- **SOLID**: Single responsibility, Open/closed, Interface segregation, Dependency inversion
-- **Existing patterns first**: Check `.c3/` docs before implementing
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GO_API_PORT` | `8180` | Gin API port |
+| `DEBUG_AUDIO` | `0` | Enable speaker output |
+
+## Key Docs
+
+| Path | What |
+|------|------|
+| `.c3/README.md` | C3 Architecture |
+| `.c3/c3-2-go-audio/` | Go components |
+| `docs/plans/` | Implementation plans |

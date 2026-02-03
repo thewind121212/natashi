@@ -20,38 +20,33 @@ This skill guides the **planning phase** before feature implementation for the D
 
 ```mermaid
 flowchart TB
-    subgraph Discord
-        USER[User]
-        VOICE[Voice Channel]
+    subgraph External["External"]
+        DISCORD[Discord API]
+        YOUTUBE[YouTube]
     end
 
     subgraph C3_1["C3-1: Node.js Application"]
-            CMD[Slash Commands]
-            QM[Queue Manager]
-            VM[Voice Manager]
-            SC[Socket Client]
-        end
+        C101[Discord Bot]
+        C102[Voice Manager]
+        C104[API Client]
+        C105[Socket Client]
+    end
 
-        subgraph IPC["Unix Sockets"]
-            SOCK1[/tmp/music.sock]
-            SOCK2[/tmp/music-audio.sock]
-        end
+    subgraph C3_2["C3-2: Go Audio Application :8180"]
+        C201[Gin API]
+        C202[Session Manager]
+        C203[Stream Extractor]
+        C204[Opus Encoder]
+        C205[Jitter Buffer]
+        C206[Socket Server]
+    end
 
-        subgraph C3_2["C3-2: Go Audio Application"]
-            WP[Worker Pool]
-            YT[yt-dlp]
-            FF[FFmpeg]
-            OP[Opus Encoder]
-        end
-
-    USER -->|commands| CMD
-    CMD --> QM
-    CMD --> VM
-    SC <--> SOCK1
-    SC <--> SOCK2
-    SOCK1 <--> WP
-    SOCK2 <--> OP
-    VM --> VOICE
+    DISCORD <-->|Gateway| C101
+    C101 --> C102 --> C104
+    C104 -->|HTTP :8180| C201
+    C105 <-->|Unix Socket| C206
+    C201 --> C202 --> C203 -->|yt-dlp| YOUTUBE
+    C203 --> C204 --> C205 --> C206
 ```
 
 ## Planning Flow
@@ -102,23 +97,24 @@ flowchart TB
         C101[c3-101<br/>Discord Bot]
         C102[c3-102<br/>Voice Manager]
         C103[c3-103<br/>Queue Manager]
-        C104[c3-104<br/>Socket Client]
+        C104[c3-104<br/>API Client]
+        C105[c3-105<br/>Socket Client]
     end
 
     subgraph C3_2["C3-2: Go Components"]
-        C201[c3-201<br/>Audio Processor]
-        C202[c3-202<br/>Stream Extractor]
-        C203[c3-203<br/>Opus Encoder]
-        C204[c3-204<br/>Jitter Buffer]
+        C201[c3-201<br/>Gin API Server]
+        C202[c3-202<br/>Session Manager]
+        C203[c3-203<br/>Stream Extractor]
+        C204[c3-204<br/>Opus Encoder]
+        C205[c3-205<br/>Jitter Buffer]
+        C206[c3-206<br/>Socket Server]
     end
 
-    C101 --> C102
+    C101 --> C102 --> C104
     C101 --> C103
-    C102 --> C104
-    C104 <-.-> C201
-    C201 --> C202
-    C202 --> C203
-    C203 --> C204
+    C104 -->|HTTP :8180| C201
+    C105 <-->|Socket| C206
+    C201 --> C202 --> C203 --> C204 --> C205 --> C206
 ```
 
 3. **Questions to answer:**
@@ -134,14 +130,16 @@ flowchart TB
 
 | Layer | Technology | Affected? |
 |-------|------------|-----------|
+| Browser HTTP API | Node.js + Express | ? |
+| Browser WebSocket | Node.js + ws | ? |
 | Discord Commands | Node.js + discord.js | ? |
 | Voice Management | Node.js + @discordjs/voice | ? |
 | Queue State | Node.js | ? |
-| IPC Protocol | Unix Socket | ? |
-| Worker Pool | Go | ? |
+| HTTP Control API | Go + Gin | ? |
+| Session Management | Go | ? |
 | Stream Extraction | Go + yt-dlp | ? |
-| Audio Encoding | Go + FFmpeg + Opus | ? |
-| Jitter Buffer | Go | ? |
+| Audio Encoding | Go + FFmpeg | ? |
+| Audio Streaming | Unix Socket | ? |
 
 **Output:** Layer impact matrix
 
@@ -153,30 +151,18 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph NodeJS["node/src/"]
-        subgraph Commands["commands/"]
-            PLAY[play.ts]
-            PAUSE[pause.ts]
-            RESUME[resume.ts]
-            STOP[stop.ts]
-            SKIP[skip.ts]
-            LIST[list.ts]
-        end
+    subgraph NodeJS["playground/src/"]
+        INDEX[index.ts]
+        SERVER[server.ts]
+        WEBSOCKET[websocket.ts]
+        API_CLIENT[api-client.ts]
+        SOCKET_CLIENT[socket-client.ts]
+        AUDIO_PLAYER[audio-player.ts]
+    end
 
-        subgraph Voice["voice/"]
-            CONN[connection.ts]
-            PLAYER[player.ts]
-        end
-
-        subgraph Queue["queue/"]
-            QMGR[manager.ts]
-        end
-
-        subgraph Socket["socket/"]
-            CLIENT[client.ts]
-            SCMD[commands.ts]
-            AUDIO[audio.ts]
-        end
+    subgraph React["playground/client/src/"]
+        APP[App.tsx]
+        HOOKS[hooks/useWebSocket.ts]
     end
 ```
 
@@ -184,33 +170,26 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Go["go/"]
-        subgraph Cmd["cmd/"]
+    subgraph Go["Go Application"]
+        subgraph Cmd["cmd/playground/"]
             MAIN[main.go]
         end
 
         subgraph Internal["internal/"]
             subgraph Server["server/"]
-                SOCK[socket.go]
-                HANDLER[handler.go]
-            end
-
-            subgraph Worker["worker/"]
-                POOL[pool.go]
+                API[api.go]
+                ROUTER[router.go]
                 SESSION[session.go]
-            end
-
-            subgraph Extractor["extractor/"]
-                YTDLP[ytdlp.go]
+                SOCKET[socket.go]
+                TYPES[types.go]
             end
 
             subgraph Encoder["encoder/"]
                 FFMPEG[ffmpeg.go]
-                OPUS[opus.go]
             end
 
-            subgraph Buffer["buffer/"]
-                JITTER[jitter.go]
+            subgraph Platform["platform/"]
+                YOUTUBE[youtube/youtube.go]
             end
         end
     end

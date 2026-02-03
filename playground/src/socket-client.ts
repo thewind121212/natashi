@@ -3,13 +3,6 @@ import { EventEmitter } from 'events';
 
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
-export interface Command {
-  type: 'play' | 'stop';
-  session_id: string;
-  url?: string;
-  format?: 'pcm' | 'webm' | 'raw';
-}
-
 export interface Event {
   type: 'ready' | 'error' | 'finished';
   session_id: string;
@@ -17,6 +10,8 @@ export interface Event {
   message?: string;
 }
 
+// SocketClient handles Unix socket connection for receiving audio data.
+// Control commands are now handled via HTTP API (see api-client.ts).
 export class SocketClient extends EventEmitter {
   private socket: net.Socket | null = null;
   private connected = false;
@@ -27,7 +22,7 @@ export class SocketClient extends EventEmitter {
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(SOCKET_PATH, () => {
-        console.log('[SocketClient] Connected to Go server');
+        console.log('[SocketClient] Connected to Go server (audio)');
         this.connected = true;
         resolve();
       });
@@ -124,14 +119,6 @@ export class SocketClient extends EventEmitter {
         }
       }
     }
-  }
-
-  send(command: Command): void {
-    if (!this.socket || !this.connected) {
-      throw new Error('Not connected');
-    }
-    const json = JSON.stringify(command);
-    this.socket.write(json);
   }
 
   disconnect(): void {
