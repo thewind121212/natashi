@@ -38,6 +38,9 @@ export class WebSocketHandler {
   }
 
   private log(source: 'go' | 'nodejs', message: string): void {
+    // Web mode: silent operation - focus on music playback only
+    if (this.webMode) return;
+
     console.log(`[${source === 'go' ? 'Go' : 'Node'}] ${message}`);
     this.broadcastJson({ type: 'log', source, message });
   }

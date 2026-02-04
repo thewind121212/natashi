@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { LogEntry } from '@/components/LogViewer';
 import { useAudioPlayer } from './useAudioPlayer';
+
+interface LogEntry {
+  timestamp: string;
+  source: 'go' | 'nodejs';
+  message: string;
+}
 
 interface Track {
   url: string;
