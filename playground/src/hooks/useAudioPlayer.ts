@@ -13,6 +13,20 @@ interface UseAudioPlayerReturn {
   isInitialized: () => boolean;
 }
 
+/**
+ * Audio Buffer Configuration
+ *
+ * Based on: Opus 256kbps, 20ms frames, 48kHz stereo
+ *
+ * - Each chunk ≈ 20ms of audio
+ * - Target: 300ms scheduled ahead at all times
+ * - Initial buffer: 15 chunks (300ms) before starting
+ * - This ensures we never underrun during normal playback
+ */
+const INITIAL_BUFFER_CHUNKS = 15;  // 15 * 20ms = 300ms
+const MIN_SCHEDULED_AHEAD_SEC = 0.25; // 250ms minimum scheduled ahead
+const TARGET_SCHEDULED_AHEAD_SEC = 0.35; // 350ms target
+
 export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
   const decoderRef = useRef<OggOpusDecoder | null>(null);
@@ -21,6 +35,10 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const initializedRef = useRef(false);
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
+
+  // Buffer management
+  const bufferRef = useRef<AudioBuffer[]>([]);
+  const isPlayingRef = useRef(false);
 
   const init = useCallback(async () => {
     if (initializedRef.current) return;
@@ -32,6 +50,37 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       initializedRef.current = true;
     } catch (err) {
       throw err;
+    }
+  }, []);
+
+  // Schedule audio buffers to Web Audio API
+  const scheduleBuffers = useCallback((audioContext: AudioContext) => {
+    const now = audioContext.currentTime;
+
+    // Calculate how far ahead we're scheduled
+    let scheduledAhead = nextPlayTimeRef.current - now;
+
+    // If we fell behind (shouldn't happen), reset to now + target
+    if (scheduledAhead < 0) {
+      nextPlayTimeRef.current = now + TARGET_SCHEDULED_AHEAD_SEC;
+      scheduledAhead = TARGET_SCHEDULED_AHEAD_SEC;
+    }
+
+    // Schedule buffers until we reach target scheduled ahead time
+    while (bufferRef.current.length > 0 && scheduledAhead < TARGET_SCHEDULED_AHEAD_SEC) {
+      const buffer = bufferRef.current.shift()!;
+
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+      source.start(nextPlayTimeRef.current);
+
+      const duration = buffer.duration;
+      nextPlayTimeRef.current += duration;
+      scheduledAhead += duration;
+
+      playedSecondsRef.current += duration;
+      onProgressRef.current?.(playedSecondsRef.current);
     }
   }, []);
 
@@ -60,30 +109,30 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       buffer.copyToChannel(new Float32Array(channelData[0]), 0);
       buffer.copyToChannel(new Float32Array(channelData[1]), 1);
 
-      const duration = samplesDecoded / 48000;
-      const now = audioContext.currentTime;
+      // Add to buffer queue
+      bufferRef.current.push(buffer);
 
-      // Schedule with lead time to handle chunk bursts from server
-      if (nextPlayTimeRef.current < now + 0.1) {
-        nextPlayTimeRef.current = now + 0.1;
+      if (!isPlayingRef.current) {
+        // Wait for initial buffer to fill
+        if (bufferRef.current.length >= INITIAL_BUFFER_CHUNKS) {
+          isPlayingRef.current = true;
+          nextPlayTimeRef.current = audioContext.currentTime + MIN_SCHEDULED_AHEAD_SEC;
+          scheduleBuffers(audioContext);
+        }
+      } else {
+        // Already playing - schedule new buffer if needed
+        scheduleBuffers(audioContext);
       }
-
-      const source = audioContext.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioContext.destination);
-      source.start(nextPlayTimeRef.current);
-
-      nextPlayTimeRef.current += duration;
-      playedSecondsRef.current += duration;
-      onProgressRef.current?.(playedSecondsRef.current);
     } catch {
       // Decode errors are expected during stream transitions
     }
-  }, []);
+  }, [scheduleBuffers]);
 
   const reset = useCallback(() => {
     playedSecondsRef.current = 0;
     nextPlayTimeRef.current = 0;
+    bufferRef.current = [];
+    isPlayingRef.current = false;
     decoderRef.current?.reset();
   }, []);
 

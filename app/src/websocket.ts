@@ -5,48 +5,6 @@ import { ApiClient } from './api-client';
 import { AudioPlayer } from './audio-player';
 import { QueueManager, QueueState } from './queue-manager';
 
-// Server-side jitter buffer for web audio streaming
-// Buffers initial chunks, then passes through directly
-const JITTER_BUFFER_CHUNKS = 8; // Buffer ~8 chunks before starting (~160ms at 20ms/chunk)
-
-class WebJitterBuffer {
-  private chunks: Buffer[] = [];
-  private started = false;
-  private onOutput: (chunk: Buffer) => void;
-
-  constructor(onOutput: (chunk: Buffer) => void) {
-    this.onOutput = onOutput;
-  }
-
-  push(chunk: Buffer): void {
-    if (!this.started) {
-      // Buffering phase - collect chunks
-      this.chunks.push(chunk);
-
-      if (this.chunks.length >= JITTER_BUFFER_CHUNKS) {
-        // Flush all buffered chunks and start pass-through
-        this.started = true;
-        for (const buffered of this.chunks) {
-          this.onOutput(buffered);
-        }
-        this.chunks = [];
-      }
-    } else {
-      // Pass-through phase - send immediately
-      this.onOutput(chunk);
-    }
-  }
-
-  stop(): void {
-    this.started = false;
-    this.chunks = [];
-  }
-
-  isStarted(): boolean {
-    return this.started;
-  }
-}
-
 export class WebSocketHandler {
   private wss: WebSocketServer;
   private socketClient: SocketClient;
@@ -60,7 +18,6 @@ export class WebSocketHandler {
   private webMode: boolean;
   private isPaused = false;
   private isStreamReady = false;
-  private webJitterBuffer: WebJitterBuffer | null = null;
 
   constructor(server: HttpServer) {
     this.wss = new WebSocketServer({ server });
@@ -159,13 +116,8 @@ export class WebSocketHandler {
 
         // Route audio based on mode
         if (this.webMode && this.isStreamReady) {
-          // Web mode: use jitter buffer for smooth streaming
-          if (!this.webJitterBuffer) {
-            this.webJitterBuffer = new WebJitterBuffer((chunk) => {
-              this.broadcastBinary(chunk);
-            });
-          }
-          this.webJitterBuffer.push(data);
+          // Web mode: pass through to browser (client handles buffering)
+          this.broadcastBinary(data);
         } else if (this.debugMode && this.isStreamReady) {
           // Debug mode: play PCM via ffplay
           this.audioPlayer.write(data);
@@ -197,10 +149,6 @@ export class WebSocketHandler {
 
   private resetPlaybackState(): void {
     this.audioPlayer.stop();
-    if (this.webJitterBuffer) {
-      this.webJitterBuffer.stop();
-      this.webJitterBuffer = null;
-    }
     this.currentSessionId = null;
     this.isPaused = false;
     this.isStreamReady = false;
