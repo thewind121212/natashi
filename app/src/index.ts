@@ -19,9 +19,10 @@ async function startExpressServer(): Promise<void> {
   const httpServer = createHttpServer(app);
   const wsHandler = new WebSocketHandler(httpServer);
 
+  const host = process.env.SERVER_HOST || '0.0.0.0';
   await new Promise<void>((resolve) => {
-    httpServer.listen(3000, () => {
-      console.log('[Server] Listening on http://localhost:3000');
+    httpServer.listen(3000, host, () => {
+      console.log(`[Server] Listening on http://${host}:3000`);
       resolve();
     });
   });

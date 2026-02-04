@@ -31,12 +31,6 @@ func LoadConfigFromEnv() {
 
 // getCookieArgs returns yt-dlp arguments for cookie authentication.
 func getCookieArgs() []string {
-	if config.CookiesFromBrowser != "" {
-		return []string{"--cookies-from-browser", config.CookiesFromBrowser}
-	}
-	if config.CookiesFile != "" {
-		return []string{"--cookies", config.CookiesFile}
-	}
 	return nil
 }
 
@@ -56,41 +50,42 @@ func (e *Extractor) Name() string {
 
 // CanHandle returns true if the URL is a YouTube URL.
 func (e *Extractor) CanHandle(url string) bool {
-	return strings.Contains(url, "youtube.com") ||
-		strings.Contains(url, "youtu.be")
+	trimmed := strings.TrimSpace(url)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "youtube.com") || strings.Contains(trimmed, "youtu.be") {
+		return true
+	}
+	return isYouTubeID(trimmed)
 }
 
 // ExtractStreamURL extracts the direct audio stream URL from a YouTube URL.
 func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
-	// Format selector optimized for YouTube Premium:
-	// 1. Prefer Opus (251) at 160kbps - YouTube's highest quality audio
-	// 2. Fall back to AAC (140) at 128kbps
-	// 3. Finally any best audio available
-	formatSelector := "bestaudio[acodec=opus]/bestaudio[acodec=aac]/bestaudio"
-
+	youtubeURL = normalizeYouTubeURL(youtubeURL)
 	args := []string{
+		"--ignore-config",
 		"--no-playlist",          // single video only
 		"--no-warnings",          // suppress warnings for speed
 		"--no-check-certificate", // skip SSL verification (faster)
 		"--socket-timeout", "10", // shorter timeout
-		"-f", formatSelector,     // prioritize high-quality codecs
-		"--get-url",              // print direct stream URL only
 	}
 
 	// Add cookie args for authenticated access (better quality)
 	args = append(args, getCookieArgs()...)
-	args = append(args, youtubeURL)
 
-	cmd := exec.Command("yt-dlp", args...)
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp failed: %w", err)
+	// Try bestaudio first (single URL)
+	primaryArgs := append(append([]string{}, args...), "-f", "bestaudio", "--get-url", youtubeURL)
+	url, err := runYtDlpGetURL(primaryArgs)
+	if err == nil {
+		return url, nil
 	}
 
-	url := strings.TrimSpace(string(out))
-	if url == "" {
-		return "", fmt.Errorf("yt-dlp returned empty URL")
+	// Fallback: no format selector (may return multiple URLs)
+	fallbackArgs := append(append([]string{}, args...), "--get-url", youtubeURL)
+	url, err = runYtDlpGetURL(fallbackArgs)
+	if err != nil {
+		return "", err
 	}
 	return url, nil
 }
@@ -104,7 +99,9 @@ type Metadata struct {
 
 // ExtractMetadata extracts track metadata without downloading.
 func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
+	youtubeURL = normalizeYouTubeURL(youtubeURL)
 	args := []string{
+		"--ignore-config",
 		"--no-playlist",
 		"--no-warnings",
 		"--no-check-certificate",
@@ -118,9 +115,9 @@ func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
 
 	cmd := exec.Command("yt-dlp", args...)
 
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("yt-dlp metadata failed: %w", err)
+		return nil, fmt.Errorf("yt-dlp metadata failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	var meta Metadata
@@ -133,6 +130,7 @@ func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
 
 // IsPlaylist checks if the URL is a YouTube playlist.
 func (e *Extractor) IsPlaylist(youtubeURL string) bool {
+	youtubeURL = normalizeYouTubeURL(youtubeURL)
 	return strings.Contains(youtubeURL, "list=")
 }
 
@@ -146,7 +144,9 @@ type PlaylistEntry struct {
 
 // ExtractPlaylist extracts all videos from a YouTube playlist.
 func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error) {
+	playlistURL = normalizeYouTubeURL(playlistURL)
 	args := []string{
+		"--ignore-config",
 		"--yes-playlist",
 		"--flat-playlist", // Don't download, just list
 		"--no-warnings",
@@ -160,9 +160,9 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 
 	cmd := exec.Command("yt-dlp", args...)
 
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("yt-dlp playlist failed: %w", err)
+		return nil, fmt.Errorf("yt-dlp playlist failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	// yt-dlp outputs one JSON per line for flat-playlist
@@ -210,4 +210,53 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 	}
 
 	return entries, nil
+}
+
+func runYtDlpGetURL(args []string) (string, error) {
+	cmd := exec.Command("yt-dlp", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("yt-dlp failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 0 {
+		return "", fmt.Errorf("yt-dlp returned empty URL")
+	}
+
+	// Prefer audio-only URL when multiple URLs are returned
+	for _, line := range lines {
+		if strings.Contains(line, "mime=audio") || strings.Contains(line, "audio/") {
+			return strings.TrimSpace(line), nil
+		}
+	}
+
+	return strings.TrimSpace(lines[0]), nil
+}
+
+func isYouTubeID(value string) bool {
+	if len(value) != 11 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func normalizeYouTubeURL(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return trimmed
+	}
+	if strings.Contains(trimmed, "youtube.com") || strings.Contains(trimmed, "youtu.be") {
+		return trimmed
+	}
+	if isYouTubeID(trimmed) {
+		return "https://www.youtube.com/watch?v=" + trimmed
+	}
+	return trimmed
 }

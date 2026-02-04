@@ -1,0 +1,11 @@
+**/.git
+**/node_modules
+**/dist
+**/bin
+**/.DS_Store
+**/.cache
+**/.turbo
+**/.next
+**/coverage
+**/tmp
+**/.env
