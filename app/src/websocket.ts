@@ -18,6 +18,15 @@ export class WebSocketHandler {
   private webMode: boolean;
   private isPaused = false;
   private isStreamReady = false;
+  private playRequestId = 0;
+  private activePlayRequestId = 0;
+  private playbackStartAt: number | null = null;
+  private playbackOffsetSec = 0;
+  private pendingTransitionTimer: NodeJS.Timeout | null = null;
+  private pendingTransitionRequestId = 0;
+  private suppressAutoAdvanceFor: Set<string> = new Set();
+
+  private static readonly TRANSITION_DEBOUNCE_MS = 150;
 
   constructor(server: HttpServer) {
     this.wss = new WebSocketServer({ server });
@@ -56,6 +65,8 @@ export class WebSocketHandler {
         webMode: this.webMode,
         isPaused: this.isPaused,
         isPlaying: this.currentSessionId !== null,
+        session_id: this.currentSessionId ?? undefined,
+        playback_secs: this.getPlaybackSeconds(),
         ...this.queueManager.getState(),
       }));
 
@@ -156,27 +167,198 @@ export class WebSocketHandler {
     this.isPaused = false;
     this.isStreamReady = false;
     this.bytesReceived = 0;
+    this.playbackStartAt = null;
+    this.playbackOffsetSec = 0;
+    if (this.pendingTransitionTimer) {
+      clearTimeout(this.pendingTransitionTimer);
+      this.pendingTransitionTimer = null;
+    }
+    this.pendingTransitionRequestId = 0;
   }
 
-  private async playTrack(url: string): Promise<void> {
-    // Stop current session if any
+  private getPlaybackSeconds(): number {
+    if (this.playbackStartAt) {
+      return this.playbackOffsetSec + (Date.now() - this.playbackStartAt) / 1000;
+    }
+    return this.playbackOffsetSec;
+  }
+
+  private async abortCurrentPlayback(): Promise<void> {
     if (this.currentSessionId) {
+      this.suppressAutoAdvanceFor.add(this.currentSessionId);
       try {
         await this.apiClient.stop(this.currentSessionId);
       } catch (err) {
         this.log('nodejs', `Stop error (ignored): ${err}`);
       }
-      this.audioPlayer.stop();
     }
+    this.resetPlaybackState();
+  }
+
+  private scheduleTransition(requestId: number, action: () => Promise<void>): void {
+    if (this.pendingTransitionTimer) {
+      clearTimeout(this.pendingTransitionTimer);
+    }
+    this.pendingTransitionRequestId = requestId;
+    this.pendingTransitionTimer = setTimeout(() => {
+      this.pendingTransitionTimer = null;
+      if (requestId !== this.activePlayRequestId || requestId !== this.pendingTransitionRequestId) {
+        return;
+      }
+      action().catch((err) => {
+        this.log('nodejs', `Transition error: ${err}`);
+      });
+    }, WebSocketHandler.TRANSITION_DEBOUNCE_MS);
+  }
+
+  private async handlePlayUrl(url: string, requestId: number): Promise<void> {
+    const nowPlaying = this.queueManager.getCurrentTrack();
+    if (this.currentSessionId && nowPlaying && this.extractVideoId(nowPlaying.url) === this.extractVideoId(url)) {
+      this.log('nodejs', 'Same video already playing, ignoring');
+      return;
+    }
+
+    await this.abortCurrentPlayback();
+
+    // Check if it's the same video already playing
+    // Fetch metadata to check if it's a playlist
+    try {
+      const metadata = await this.apiClient.getMetadata(url);
+      if (requestId !== this.activePlayRequestId) return;
+
+      if (metadata.is_playlist) {
+        // It's a playlist - extract all videos and add to queue
+        this.log('nodejs', 'Detected playlist, extracting videos...');
+        this.broadcastJson({ type: 'status', message: 'Loading playlist...' });
+
+        const playlist = await this.apiClient.getPlaylist(url);
+        if (requestId !== this.activePlayRequestId) return;
+        if (playlist.error) {
+          this.broadcastJson({ type: 'error', message: playlist.error });
+          return;
+        }
+
+        this.log('nodejs', `Found ${playlist.count} videos in playlist`);
+
+        // Add all videos to queue
+        for (const entry of playlist.entries) {
+          this.queueManager.addTrack(
+            entry.url,
+            entry.title,
+            entry.duration,
+            entry.thumbnail
+          );
+        }
+
+        const firstTrack = this.queueManager.startPlaying(0);
+        if (firstTrack) {
+          this.broadcastJson({
+            type: 'nowPlaying',
+            nowPlaying: firstTrack,
+          });
+          await this.playTrack(firstTrack.url, requestId);
+        }
+      } else {
+        // Single video - add to queue and play
+        this.queueManager.addTrack(
+          url,
+          metadata.title,
+          metadata.duration,
+          metadata.thumbnail
+        );
+
+        const track = this.queueManager.startPlaying(this.queueManager.getQueue().length - 1);
+        if (track) {
+          this.broadcastJson({
+            type: 'nowPlaying',
+            nowPlaying: track,
+          });
+          await this.playTrack(track.url, requestId);
+        }
+      }
+    } catch (err) {
+      this.log('nodejs', `Failed to process URL: ${err}`);
+      this.broadcastJson({ type: 'error', message: `Failed to process URL: ${err}` });
+    }
+  }
+
+  private async handlePlayFromQueue(index: number, requestId: number): Promise<void> {
+    if (this.currentSessionId && index === this.queueManager.getState().currentIndex) {
+      this.log('nodejs', 'Same queue index already playing, ignoring');
+      return;
+    }
+
+    await this.abortCurrentPlayback();
+
+    // Now update queue and get track
+    const track = this.queueManager.startPlaying(index);
+    if (track) {
+      this.log('nodejs', `Playing from queue: ${track.title}`);
+
+      // Broadcast now playing
+      this.broadcastJson({
+        type: 'nowPlaying',
+        nowPlaying: track,
+      });
+
+      await this.playTrack(track.url, requestId);
+    } else {
+      this.log('nodejs', `Invalid queue index: ${index}`);
+    }
+  }
+
+  private async handleSkip(requestId: number): Promise<void> {
+    await this.abortCurrentPlayback();
+
+    const nextTrack = this.queueManager.skip();
+    if (nextTrack) {
+      await this.playTrack(nextTrack.url, requestId);
+    } else {
+      this.log('nodejs', 'No more tracks in queue');
+      this.broadcastJson({ type: 'queueFinished' });
+    }
+  }
+
+  private async handlePrevious(requestId: number): Promise<void> {
+    await this.abortCurrentPlayback();
+
+    const prevTrack = this.queueManager.previous();
+    if (prevTrack) {
+      await this.playTrack(prevTrack.url, requestId);
+    } else {
+      this.log('nodejs', 'Already at start of queue');
+    }
+  }
+
+  private async handleResumeFrom(seconds: number, requestId: number): Promise<void> {
+    const track = this.queueManager.getCurrentTrack();
+    if (!track) {
+      this.log('nodejs', 'No track to resume');
+      return;
+    }
+
+    await this.abortCurrentPlayback();
+
+    this.log('nodejs', `Resuming from ${seconds.toFixed(2)}s: ${track.title}`);
+    this.broadcastJson({
+      type: 'nowPlaying',
+      nowPlaying: track,
+    });
+
+    await this.playTrack(track.url, requestId, seconds);
+  }
+
+  private async playTrack(url: string, requestId: number, startAtSec: number = 0): Promise<void> {
+    // Generate new session ID
+    const sessionId = generateSessionId();
+    this.currentSessionId = sessionId;
 
     // Reset state for new session
     this.bytesReceived = 0;
     this.isPaused = false;
     this.isStreamReady = false;
-
-    // Generate new session ID
-    const sessionId = generateSessionId();
-    this.currentSessionId = sessionId;
+    this.playbackStartAt = null;
+    this.playbackOffsetSec = startAtSec;
 
     this.log('nodejs', `New session: ${sessionId.slice(0, 8)}...`);
     this.log('nodejs', `Starting playback: ${url}`);
@@ -184,7 +366,19 @@ export class WebSocketHandler {
     try {
       // Select format based on mode: web (Opus 256kbps) or pcm (debug)
       const format = this.webMode ? 'web' : 'pcm';
-      const result = await this.apiClient.play(sessionId, url, format);
+      const result = await this.apiClient.play(sessionId, url, format, startAtSec || undefined);
+      if (requestId !== this.activePlayRequestId) {
+        this.log('nodejs', 'Stale play request, stopping session');
+        try {
+          await this.apiClient.stop(sessionId);
+        } catch {
+          // Ignore stop errors for stale sessions
+        }
+        if (this.currentSessionId === sessionId) {
+          this.currentSessionId = null;
+        }
+        return;
+      }
       this.log('go', `Play response: ${result.status} (format: ${format})`);
       this.broadcastJson({ type: 'session', session_id: sessionId });
     } catch (err) {
@@ -209,6 +403,9 @@ export class WebSocketHandler {
     switch (event.type) {
       case 'ready':
         this.isStreamReady = true;
+        if (!this.isPaused) {
+          this.playbackStartAt = Date.now();
+        }
         if (this.debugMode && !this.webMode && !this.isPaused) {
           this.audioPlayer.start();
         }
@@ -222,13 +419,23 @@ export class WebSocketHandler {
         }
         this.currentSessionId = null;
         this.isStreamReady = false;
+        this.playbackStartAt = null;
+        this.playbackOffsetSec = 0;
         this.broadcastJson({ ...event, bytes: this.bytesReceived });
+
+        if (event.session_id && this.suppressAutoAdvanceFor.has(event.session_id)) {
+          this.suppressAutoAdvanceFor.delete(event.session_id);
+          this.log('nodejs', 'Auto-advance suppressed for stopped session');
+          break;
+        }
 
         // Auto-advance to next track in queue
         const nextTrack = this.queueManager.currentFinished();
         if (nextTrack) {
           this.log('nodejs', `Auto-advancing to next track: ${nextTrack.title}`);
-          this.playTrack(nextTrack.url);
+          const requestId = ++this.playRequestId;
+          this.activePlayRequestId = requestId;
+          this.playTrack(nextTrack.url, requestId);
         } else {
           this.log('nodejs', 'Queue finished');
           this.broadcastJson({ type: 'queueFinished' });
@@ -252,80 +459,11 @@ export class WebSocketHandler {
       this.log('nodejs', `Browser action: ${message.action || message.type}`);
 
       if (message.action === 'play' && message.url) {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
         const url = message.url.trim();
 
-        // Check if it's the same video already playing
-        const nowPlaying = this.queueManager.getCurrentTrack();
-        if (nowPlaying && this.extractVideoId(nowPlaying.url) === this.extractVideoId(url)) {
-          this.log('nodejs', 'Same video already playing, ignoring');
-          return;
-        }
-
-        // Fetch metadata to check if it's a playlist
-        try {
-          const metadata = await this.apiClient.getMetadata(url);
-
-          if (metadata.is_playlist) {
-            // It's a playlist - extract all videos and add to queue
-            this.log('nodejs', 'Detected playlist, extracting videos...');
-            this.broadcastJson({ type: 'status', message: 'Loading playlist...' });
-
-            const playlist = await this.apiClient.getPlaylist(url);
-            if (playlist.error) {
-              this.broadcastJson({ type: 'error', message: playlist.error });
-              return;
-            }
-
-            this.log('nodejs', `Found ${playlist.count} videos in playlist`);
-
-            // Add all videos to queue
-            for (const entry of playlist.entries) {
-              this.queueManager.addTrack(
-                entry.url,
-                entry.title,
-                entry.duration,
-                entry.thumbnail
-              );
-            }
-
-            // Start playing first track if not already playing
-            if (!this.currentSessionId) {
-              const firstTrack = this.queueManager.startPlaying(0);
-              if (firstTrack) {
-                this.broadcastJson({
-                  type: 'nowPlaying',
-                  nowPlaying: firstTrack,
-                });
-                await this.playTrack(firstTrack.url);
-              }
-            }
-          } else {
-            // Single video - add to queue and play
-            this.queueManager.addTrack(
-              url,
-              metadata.title,
-              metadata.duration,
-              metadata.thumbnail
-            );
-
-            // If nothing is playing, start playing this track
-            if (!this.currentSessionId) {
-              const track = this.queueManager.startPlaying(this.queueManager.getQueue().length - 1);
-              if (track) {
-                this.broadcastJson({
-                  type: 'nowPlaying',
-                  nowPlaying: track,
-                });
-                await this.playTrack(track.url);
-              }
-            } else {
-              this.log('nodejs', `Added to queue: ${metadata.title}`);
-            }
-          }
-        } catch (err) {
-          this.log('nodejs', `Failed to process URL: ${err}`);
-          this.broadcastJson({ type: 'error', message: `Failed to process URL: ${err}` });
-        }
+        this.scheduleTransition(requestId, () => this.handlePlayUrl(url, requestId));
 
       } else if (message.action === 'addToQueue' && message.url) {
         // Add to queue
@@ -348,7 +486,9 @@ export class WebSocketHandler {
           if (!this.currentSessionId) {
             const track = this.queueManager.startPlaying(0);
             if (track) {
-              await this.playTrack(track.url);
+              const requestId = ++this.playRequestId;
+              this.activePlayRequestId = requestId;
+              await this.playTrack(track.url, requestId);
             }
           }
         } catch (err) {
@@ -364,79 +504,28 @@ export class WebSocketHandler {
         }
 
       } else if (message.action === 'playFromQueue' && typeof message.index === 'number') {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
         // Play specific track from queue
         this.log('nodejs', `playFromQueue: index=${message.index}`);
 
-        // Stop current playback FIRST
-        if (this.currentSessionId) {
-          try {
-            await this.apiClient.stop(this.currentSessionId);
-          } catch (err) {
-            this.log('nodejs', `Stop error: ${err}`);
-          }
-          this.audioPlayer.stop();
-        }
-        this.currentSessionId = null;
-
-        // Now update queue and get track
-        const track = this.queueManager.startPlaying(message.index);
-        if (track) {
-          this.log('nodejs', `Playing from queue: ${track.title}`);
-
-          // Reset playback state
-          this.bytesReceived = 0;
-          this.isPaused = false;
-          this.isStreamReady = false;
-
-          // Broadcast now playing
-          this.broadcastJson({
-            type: 'nowPlaying',
-            nowPlaying: track,
-          });
-
-          await this.playTrack(track.url);
-        } else {
-          this.log('nodejs', `Invalid queue index: ${message.index}`);
-        }
+        this.scheduleTransition(requestId, () => this.handlePlayFromQueue(message.index, requestId));
 
       } else if (message.action === 'skip') {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
         // Skip to next track
         this.log('nodejs', 'Skip requested');
-        if (this.currentSessionId) {
-          try {
-            await this.apiClient.stop(this.currentSessionId);
-          } catch (err) {
-            this.log('nodejs', `Stop error: ${err}`);
-          }
-        }
-        this.resetPlaybackState();
 
-        const nextTrack = this.queueManager.skip();
-        if (nextTrack) {
-          await this.playTrack(nextTrack.url);
-        } else {
-          this.log('nodejs', 'No more tracks in queue');
-          this.broadcastJson({ type: 'queueFinished' });
-        }
+        this.scheduleTransition(requestId, () => this.handleSkip(requestId));
 
       } else if (message.action === 'previous') {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
         // Go to previous track
         this.log('nodejs', 'Previous requested');
-        if (this.currentSessionId) {
-          try {
-            await this.apiClient.stop(this.currentSessionId);
-          } catch (err) {
-            this.log('nodejs', `Stop error: ${err}`);
-          }
-        }
-        this.resetPlaybackState();
 
-        const prevTrack = this.queueManager.previous();
-        if (prevTrack) {
-          await this.playTrack(prevTrack.url);
-        } else {
-          this.log('nodejs', 'Already at start of queue');
-        }
+        this.scheduleTransition(requestId, () => this.handlePrevious(requestId));
 
       } else if (message.action === 'clearQueue') {
         // Clear queue and stop
@@ -473,6 +562,10 @@ export class WebSocketHandler {
 
       } else if (message.action === 'pause') {
         if (this.currentSessionId && !this.isPaused) {
+          if (this.playbackStartAt) {
+            this.playbackOffsetSec += (Date.now() - this.playbackStartAt) / 1000;
+            this.playbackStartAt = null;
+          }
           // Set flag FIRST - stops audio processing immediately
           this.isPaused = true;
 
@@ -493,6 +586,7 @@ export class WebSocketHandler {
 
       } else if (message.action === 'resume') {
         if (this.currentSessionId && this.isPaused) {
+          this.playbackStartAt = Date.now();
           // Tell Go to resume FIRST (it needs to start sending chunks)
           const sessionId = this.currentSessionId;
           this.apiClient.resume(sessionId).then(() => {
@@ -509,6 +603,13 @@ export class WebSocketHandler {
 
           this.broadcastJson({ type: 'resumed' });
         }
+      } else if (message.action === 'resumeFrom' && typeof message.seconds === 'number') {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
+        const seconds = Math.max(0, message.seconds);
+        this.log('nodejs', `Resume from ${seconds.toFixed(2)}s requested`);
+
+        this.scheduleTransition(requestId, () => this.handleResumeFrom(seconds, requestId));
       }
     } catch (err) {
       this.log('nodejs', `Error handling message: ${err}`);

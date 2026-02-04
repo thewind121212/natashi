@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { OggOpusDecoder } from 'ogg-opus-decoder';
 
 interface UseAudioPlayerOptions {
@@ -38,7 +38,9 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const bufferedSecondsRef = useRef(0);
   const initializedRef = useRef(false);
   const onProgressRef = useRef(onProgress);
-  onProgressRef.current = onProgress;
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+  }, [onProgress]);
 
   // Buffer management
   const bufferRef = useRef<AudioBuffer[]>([]);
@@ -47,14 +49,10 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const init = useCallback(async () => {
     if (initializedRef.current) return;
 
-    try {
-      audioContextRef.current = new AudioContext({ sampleRate: 48000 });
-      decoderRef.current = new OggOpusDecoder({ forceStereo: true });
-      await decoderRef.current.ready;
-      initializedRef.current = true;
-    } catch (err) {
-      throw err;
-    }
+    audioContextRef.current = new AudioContext({ sampleRate: 48000 });
+    decoderRef.current = new OggOpusDecoder({ forceStereo: true });
+    await decoderRef.current.ready;
+    initializedRef.current = true;
   }, []);
 
   // Schedule audio buffers to Web Audio API

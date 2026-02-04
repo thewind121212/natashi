@@ -33,7 +33,7 @@ func NewDefaultPipeline() *FFmpegPipeline {
 }
 
 // Start begins the encoding pipeline.
-func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format Format) error {
+func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format Format, startAtSec float64) error {
 	ctx, p.cancel = context.WithCancel(ctx)
 
 	switch format {
@@ -43,7 +43,7 @@ func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format For
 		p.readBufferSize = 16384
 	}
 
-	args := p.buildArgs(streamURL, format)
+	args := p.buildArgs(streamURL, format, startAtSec)
 	fmt.Printf("[FFmpeg] Starting with format: %s\n", format)
 	p.cmd = exec.CommandContext(ctx, "ffmpeg", args...)
 
@@ -127,7 +127,7 @@ func (p *FFmpegPipeline) Resume() {
 }
 
 // buildArgs constructs FFmpeg command arguments based on format.
-func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
+func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec float64) []string {
 	volume := fmt.Sprintf("volume=%.2f", p.config.Volume)
 	sampleRate := fmt.Sprintf("%d", p.config.SampleRate)
 	channels := fmt.Sprintf("%d", p.config.Channels)
@@ -138,14 +138,21 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 		"-reconnect", "1",
 		"-reconnect_streamed", "1",
 		"-reconnect_delay_max", "5",
-		// Input
+	}
+
+	if startAtSec > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%.3f", startAtSec))
+	}
+
+	// Input
+	args = append(args,
 		"-i", streamURL,
 		// Audio processing
 		"-af", volume,
 		"-ar", sampleRate,
 		"-ac", channels,
 		"-loglevel", "warning",
-	}
+	)
 
 	switch format {
 	case FormatPCM:

@@ -71,6 +71,12 @@ export function useWebSocket(): UseWebSocketReturn {
   const playStartTimeRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const lastTickRef = useRef<number | null>(null);
+  const playbackTimeRef = useRef(0);
+  const audioProgressOffsetRef = useRef(0);
+  const autoPauseRequestedRef = useRef(false);
+  const needsResumeFromRef = useRef(false);
+  const resumeFromRequestedRef = useRef<number | null>(null);
 
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
@@ -87,14 +93,25 @@ export function useWebSocket(): UseWebSocketReturn {
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
   const audioStartedRef = useRef(false);
 
-  // Audio player for web mode (Opus -> Web Audio API)
-  const audioPlayer = useAudioPlayer({
-    onProgress: (seconds) => {
-      if (mountedRef.current) {
-        setPlaybackTime(seconds);
+  const getWebSocketUrl = useCallback(() => {
+    const wsOverride = import.meta.env.VITE_WS_URL as string | undefined;
+    if (wsOverride && wsOverride.trim()) return wsOverride.trim();
+
+    const apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+    if (apiBase && apiBase.trim()) {
+      try {
+        const url = new URL(apiBase.trim());
+        const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${url.host}`;
+      } catch {
+        // Fall through to default
       }
-    },
-  });
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    return `${protocol}//${host}:3000`;
+  }, []);
 
   const addLog = useCallback((source: 'go' | 'nodejs', message: string) => {
     if (!mountedRef.current) return;
@@ -113,8 +130,38 @@ export function useWebSocket(): UseWebSocketReturn {
     setStatusType(type);
   }, []);
 
+  // Audio player for web mode (Opus -> Web Audio API)
+  const audioPlayer = useAudioPlayer({
+    onProgress: (seconds) => {
+      if (mountedRef.current) {
+        const adjusted = audioProgressOffsetRef.current + seconds;
+        setPlaybackTime(adjusted);
+        lastTickRef.current = Date.now();
+      }
+    },
+  });
+
+  const ensureWebAudioInitialized = useCallback(async () => {
+    if (!webModeRef.current.value) return true;
+    if (audioPlayer.isInitialized()) return true;
+    try {
+      audioProgressOffsetRef.current = playbackTimeRef.current;
+      await audioPlayer.init();
+      addLog('nodejs', 'Audio player initialized (web mode)');
+      return true;
+    } catch (err) {
+      updateStatus('Failed to initialize audio player', 'error');
+      addLog('nodejs', `Audio init error: ${err}`);
+      return false;
+    }
+  }, [audioPlayer, addLog, updateStatus]);
+
   const statusRef = useRef(status);
   statusRef.current = status;
+
+  useEffect(() => {
+    playbackTimeRef.current = playbackTime;
+  }, [playbackTime]);
 
   const handleMessage = useCallback((msg: WebSocketMessage) => {
     if (!mountedRef.current) return;
@@ -132,9 +179,20 @@ export function useWebSocket(): UseWebSocketReturn {
         setWebMode(!!msg.webMode);
         setIsPaused(!!msg.isPaused);
         setIsPlaying(!!msg.isPlaying);
+        if (typeof msg.playback_secs === 'number') {
+          setPlaybackTime(msg.playback_secs);
+          lastTickRef.current = Date.now();
+        }
         if (msg.queue) setQueue(msg.queue);
         if (typeof msg.currentIndex === 'number') setCurrentIndex(msg.currentIndex);
         if (msg.nowPlaying !== undefined) setNowPlaying(msg.nowPlaying);
+        if (msg.webMode && msg.isPlaying && !msg.isPaused && !audioPlayerRef.current.player.isInitialized()) {
+          if (!autoPauseRequestedRef.current) {
+            autoPauseRequestedRef.current = true;
+            needsResumeFromRef.current = true;
+            wsRef.current?.send(JSON.stringify({ action: 'pause' }));
+          }
+        }
         break;
 
       case 'queueUpdated':
@@ -158,10 +216,20 @@ export function useWebSocket(): UseWebSocketReturn {
         addLog('nodejs', `Session started: ${msg.session_id}`);
         setIsPlaying(true);
         setIsPaused(false);
-        setPlaybackTime(0);
+        if (resumeFromRequestedRef.current !== null) {
+          const resumeFrom = resumeFromRequestedRef.current;
+          setPlaybackTime(resumeFrom);
+          audioProgressOffsetRef.current = resumeFrom;
+          lastTickRef.current = Date.now();
+          resumeFromRequestedRef.current = null;
+        } else {
+          setPlaybackTime(0);
+          audioProgressOffsetRef.current = 0;
+          lastTickRef.current = Date.now();
+        }
         audioStartedRef.current = false;
         // Reset audio player for new track (web mode)
-        audioPlayerRef.current?.reset();
+        audioPlayerRef.current.player?.reset();
         break;
 
       case 'ready': {
@@ -176,6 +244,7 @@ export function useWebSocket(): UseWebSocketReturn {
         // Update playback time
         if (typeof msg.playback_secs === 'number') {
           setPlaybackTime(msg.playback_secs);
+          lastTickRef.current = Date.now();
         }
         break;
       }
@@ -188,6 +257,8 @@ export function useWebSocket(): UseWebSocketReturn {
         setNowPlaying(null);
         playStartTimeRef.current = null;
         audioStartedRef.current = false;
+        audioProgressOffsetRef.current = 0;
+        lastTickRef.current = null;
         addLog('nodejs', `Error: ${msg.message}`);
         break;
 
@@ -202,6 +273,8 @@ export function useWebSocket(): UseWebSocketReturn {
         setNowPlaying(null);
         playStartTimeRef.current = null;
         audioStartedRef.current = false;
+        audioProgressOffsetRef.current = 0;
+        lastTickRef.current = null;
         addLog('nodejs', `Finished (${totalTime}s, ${formatBytes(msg.bytes || 0)})`);
         break;
       }
@@ -215,6 +288,8 @@ export function useWebSocket(): UseWebSocketReturn {
         setNowPlaying(null);
         playStartTimeRef.current = null;
         audioStartedRef.current = false;
+        audioProgressOffsetRef.current = 0;
+        lastTickRef.current = null;
         addLog('nodejs', 'Playback stopped');
         break;
 
@@ -231,16 +306,32 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [addLog, updateStatus]);
 
   // Store handlers in refs to avoid effect re-runs
-  const handleMessageRef = useRef(handleMessage);
-  const addLogRef = useRef(addLog);
-  const updateStatusRef = useRef(updateStatus);
-  const audioPlayerRef = useRef(audioPlayer);
-  const webModeRef = useRef(webMode);
-  handleMessageRef.current = handleMessage;
-  addLogRef.current = addLog;
-  updateStatusRef.current = updateStatus;
-  audioPlayerRef.current = audioPlayer;
-  webModeRef.current = webMode;
+  // Using object wrapper to satisfy ESLint immutability rules
+  const handleMessageRef = useRef({ fn: handleMessage });
+  const addLogRef = useRef({ fn: addLog });
+  const updateStatusRef = useRef({ fn: updateStatus });
+  const audioPlayerRef = useRef({ player: audioPlayer });
+  const webModeRef = useRef({ value: webMode });
+
+  useEffect(() => {
+    handleMessageRef.current.fn = handleMessage;
+  }, [handleMessage]);
+
+  useEffect(() => {
+    addLogRef.current.fn = addLog;
+  }, [addLog]);
+
+  useEffect(() => {
+    updateStatusRef.current.fn = updateStatus;
+  }, [updateStatus]);
+
+  useEffect(() => {
+    audioPlayerRef.current.player = audioPlayer;
+  }, [audioPlayer]);
+
+  useEffect(() => {
+    webModeRef.current.value = webMode;
+  }, [webMode]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -255,9 +346,7 @@ export function useWebSocket(): UseWebSocketReturn {
         ws.close();
       }
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.hostname;
-      ws = new WebSocket(`${protocol}//${host}:3000`);
+      ws = new WebSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.binaryType = 'arraybuffer'; // Enable binary message handling
@@ -265,21 +354,25 @@ export function useWebSocket(): UseWebSocketReturn {
       ws.onopen = () => {
         if (!mountedRef.current) return;
         setIsConnected(true);
-        updateStatusRef.current('Connected to server', 'success');
-        addLogRef.current('nodejs', 'WebSocket connected');
+        autoPauseRequestedRef.current = false;
+        needsResumeFromRef.current = false;
+        updateStatusRef.current.fn('Connected to server', 'success');
+        addLogRef.current.fn('nodejs', 'WebSocket connected');
       };
 
       ws.onclose = () => {
         if (!mountedRef.current) return;
         setIsConnected(false);
-        updateStatusRef.current('Disconnected from server', 'error');
+        autoPauseRequestedRef.current = false;
+        needsResumeFromRef.current = false;
+        updateStatusRef.current.fn('Disconnected from server', 'error');
 
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
         }
         reconnectTimeoutRef.current = window.setTimeout(() => {
           if (mountedRef.current) {
-            addLogRef.current('nodejs', 'Reconnecting...');
+            addLogRef.current.fn('nodejs', 'Reconnecting...');
             connect();
           }
         }, 2000);
@@ -292,14 +385,14 @@ export function useWebSocket(): UseWebSocketReturn {
       ws.onmessage = (event) => {
         // Handle binary audio data (web mode)
         if (event.data instanceof ArrayBuffer) {
-          if (webModeRef.current && audioPlayerRef.current.isInitialized()) {
+          if (webModeRef.current.value && audioPlayerRef.current.player.isInitialized()) {
             if (!audioStartedRef.current && statusRef.current !== 'Playing') {
               audioStartedRef.current = true;
-              updateStatusRef.current('Playing', 'success');
+              updateStatusRef.current.fn('Playing', 'success');
               setIsPlaying(true);
               setIsPaused(false);
             }
-            audioPlayerRef.current.playChunk(new Uint8Array(event.data));
+            audioPlayerRef.current.player.playChunk(new Uint8Array(event.data));
           }
           return;
         }
@@ -307,7 +400,7 @@ export function useWebSocket(): UseWebSocketReturn {
         // Handle JSON control messages
         try {
           const msg = JSON.parse(event.data);
-          handleMessageRef.current(msg);
+          handleMessageRef.current.fn(msg);
         } catch {
           // Ignore
         }
@@ -327,7 +420,27 @@ export function useWebSocket(): UseWebSocketReturn {
       }
       wsRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!webMode || !isPlaying || isPaused) {
+      lastTickRef.current = null;
+      return;
+    }
+    if (audioPlayer.isInitialized()) return;
+    lastTickRef.current = Date.now();
+    const timer = window.setInterval(() => {
+      if (!mountedRef.current || !lastTickRef.current) return;
+      const now = Date.now();
+      const delta = (now - lastTickRef.current) / 1000;
+      lastTickRef.current = now;
+      setPlaybackTime((prev) => prev + delta);
+    }, 500);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [webMode, isPlaying, isPaused, audioPlayer]);
 
   const play = useCallback(async (url: string) => {
     if (!url.trim()) {
@@ -341,16 +454,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     // Initialize audio player for web mode (requires user gesture)
-    if (webModeRef.current && !audioPlayer.isInitialized()) {
-      try {
-        await audioPlayer.init();
-        addLog('nodejs', 'Audio player initialized (web mode)');
-      } catch (err) {
-        updateStatus('Failed to initialize audio player', 'error');
-        addLog('nodejs', `Audio init error: ${err}`);
-        return;
-      }
-    }
+    if (!(await ensureWebAudioInitialized())) return;
 
     playStartTimeRef.current = Date.now();
     setCurrentUrl(url.trim());
@@ -360,7 +464,7 @@ export function useWebSocket(): UseWebSocketReturn {
       action: 'play',
       url: url.trim(),
     }));
-  }, [updateStatus, addLog, audioPlayer]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
   const stop = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'stop' }));
@@ -374,9 +478,25 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [addLog]);
 
   const resume = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ action: 'resume' }));
-    addLog('nodejs', 'Resume requested');
-  }, [addLog]);
+    (async () => {
+      if (!(await ensureWebAudioInitialized())) return;
+      const shouldResumeFrom = needsResumeFromRef.current || (webModeRef.current.value && !audioStartedRef.current);
+      if (shouldResumeFrom) {
+        needsResumeFromRef.current = false;
+        audioPlayerRef.current.player?.reset();
+        audioStartedRef.current = false;
+        const seconds = playbackTimeRef.current;
+        resumeFromRequestedRef.current = seconds;
+        setPlaybackTime(seconds);
+        audioProgressOffsetRef.current = seconds;
+        lastTickRef.current = Date.now();
+        wsRef.current?.send(JSON.stringify({ action: 'resumeFrom', seconds }));
+      } else {
+        wsRef.current?.send(JSON.stringify({ action: 'resume' }));
+      }
+      addLog('nodejs', 'Resume requested');
+    })();
+  }, [addLog, ensureWebAudioInitialized]);
 
   const clearLogs = useCallback(() => {
     setLogs([]);
@@ -407,17 +527,27 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', `Removing track at index ${index}`);
   }, [addLog]);
 
-  const skip = useCallback(() => {
+  const skip = useCallback(async () => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current.player?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'skip' }));
     updateStatus('Skipping...');
     addLog('nodejs', 'Skip requested');
-  }, [updateStatus, addLog]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
-  const previous = useCallback(() => {
+  const previous = useCallback(async () => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current.player?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'previous' }));
     updateStatus('Going back...');
     addLog('nodejs', 'Previous requested');
-  }, [updateStatus, addLog]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
   const clearQueue = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'clearQueue' }));
@@ -425,10 +555,15 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', 'Queue cleared');
   }, [updateStatus, addLog]);
 
-  const playFromQueue = useCallback((index: number) => {
+  const playFromQueue = useCallback(async (index: number) => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current.player?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'playFromQueue', index }));
     addLog('nodejs', `Playing track ${index + 1} from queue`);
-  }, [addLog]);
+  }, [addLog, ensureWebAudioInitialized]);
 
   return {
     isConnected,

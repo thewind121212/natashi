@@ -41,7 +41,7 @@ type Pipeline interface {
 	// Start begins the encoding pipeline for the given stream URL.
 	// The format parameter determines the output format (pcm or raw).
 	// Returns an error if the pipeline fails to start.
-	Start(ctx context.Context, streamURL string, format Format) error
+	Start(ctx context.Context, streamURL string, format Format, startAtSec float64) error
 
 	// Output returns a channel that receives encoded audio chunks.
 	// For FormatPCM: chunks are raw PCM s16le data (for ffplay).

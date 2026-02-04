@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import './App.css';
 import {
@@ -21,6 +21,8 @@ import {
 
 function App() {
   const [urlInput, setUrlInput] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
 
   const {
     isConnected,
@@ -44,6 +46,29 @@ function App() {
     previous,
     clearQueue,
   } = useWebSocket();
+
+  // Handle error toast display
+  const errorStatus = statusType === 'error' ? status : null;
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!errorStatus) {
+      return;
+    }
+    setToastMessage(errorStatus);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  }, [errorStatus]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => () => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+  }, []);
 
   // Determine loading state from status
   const isLoading = status === 'Extracting...' || status === 'Starting...' || status === 'Loading playlist...';
@@ -90,7 +115,8 @@ function App() {
     return url.replace(/\/(mq|hq|sd)default\.jpg$/, '/maxresdefault.jpg');
   };
 
-  const ProgressBar = () => (
+  // Progress bar markup (inline to access component state)
+  const progressBarElement = (
     <div className={`w-full group ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
       <div className="flex justify-between text-xs text-gray-400 mb-2 font-mono">
         <span>{formatTime(playbackTime)}</span>
@@ -109,52 +135,69 @@ function App() {
 
   return (
     <div className="h-screen bg-slate-900 text-slate-200 font-sans flex flex-col overflow-hidden">
-
-      {/* Status Header */}
-      <div className="flex-none p-4 md:px-8 flex justify-between items-center bg-slate-900/80 backdrop-blur-md border-b border-slate-800 z-40">
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isConnected ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
-            {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            <span className="text-xs font-bold tracking-wider">{isConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-slate-700">
-          <div
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
-          >
-            <Radio size={14} /> WEB
-          </div>
-          <div
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${debugMode && !webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
-          >
-            <Speaker size={14} /> MACHINE
-          </div>
-        </div>
-      </div>
-
-      {/* URL Input Bar */}
-      <div className="flex-none px-4 md:px-6 py-3">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex gap-3">
-            <div className="flex-1 relative">
-              <Youtube size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Paste YouTube URL or playlist..."
-                className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-              />
+      {toastMessage && (
+        <div className="fixed top-4 right-4 z-50 max-w-sm">
+          <div className="flex items-start gap-3 bg-slate-900/90 border border-rose-500/30 text-rose-100 px-4 py-3 rounded-2xl shadow-2xl backdrop-blur-md">
+            <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.7)]"></div>
+            <div className="text-sm leading-snug">
+              <div className="font-semibold text-rose-200">Playback error</div>
+              <div className="text-rose-100/90">{toastMessage.replace(/^Error:\s*/, '')}</div>
             </div>
             <button
-              onClick={() => handleUrlSubmit()}
-              disabled={!urlInput.trim()}
-              className="px-6 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/20 flex items-center gap-2 transition-all active:scale-[0.98]"
+              onClick={() => setToastMessage(null)}
+              className="ml-2 text-rose-200/70 hover:text-rose-100 transition-colors"
+              aria-label="Dismiss error"
             >
-              <Play size={18} fill="currentColor" /> Play
+              <X size={16} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Status Header */}
+      <div className="flex-none p-4 md:px-8 bg-slate-900/80 backdrop-blur-md border-b border-slate-800 z-40">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row md:items-center gap-4">
+          <div className="flex items-center gap-2 md:order-1">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isConnected ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+              {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+              <span className="text-xs font-bold tracking-wider">{isConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+            </div>
+          </div>
+
+          <div className="flex-1 md:order-2">
+            <div className="max-w-3xl mx-auto flex gap-3">
+              <div className="flex-1 relative">
+                <Youtube size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Paste YouTube URL or playlist..."
+                  className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                />
+              </div>
+              <button
+                onClick={() => handleUrlSubmit()}
+                disabled={!urlInput.trim()}
+                className="px-6 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/20 flex items-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Play size={18} fill="currentColor" /> Play
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-slate-700 md:order-3">
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
+            >
+              <Radio size={14} /> WEB
+            </div>
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${debugMode && !webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
+            >
+              <Speaker size={14} /> MACHINE
+            </div>
           </div>
         </div>
       </div>
@@ -196,7 +239,10 @@ function App() {
 
             {/* Album Art & Track Info */}
             <div className="flex flex-col items-center mb-8 relative z-10">
-              <div className="relative w-64 h-64 md:w-80 md:h-80 mb-8 transition-transform duration-700 ease-out">
+              <div
+                className="relative w-full max-w-[560px] md:max-w-[640px] mb-8 transition-transform duration-700 ease-out"
+                style={{ aspectRatio: '16 / 9' }}
+              >
                 <div className={`w-full h-full rounded-3xl shadow-2xl overflow-hidden relative border border-white/10 ${isLoading ? 'scale-95 opacity-80' : 'scale-100 opacity-100'} transition-all duration-500`}>
                   {nowPlaying?.thumbnail ? (
                     <img src={getHiResThumbnail(nowPlaying.thumbnail)} alt={nowPlaying.title} className="w-full h-full object-cover" />
@@ -228,7 +274,7 @@ function App() {
 
             {/* Controls */}
             <div className="space-y-6 relative z-10">
-              <ProgressBar />
+              {progressBarElement}
 
               <div className="flex items-center justify-center gap-4 md:gap-6">
                 <button onClick={previous} disabled={isLoading} className="p-2 text-slate-300 hover:text-white transition-colors disabled:opacity-50">

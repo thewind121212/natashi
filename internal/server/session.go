@@ -52,6 +52,7 @@ type Session struct {
 	State     SessionState
 	URL       string
 	Format    encoder.Format
+	StartAt   float64
 	Pipeline  encoder.Pipeline
 	Cancel    context.CancelFunc
 	BytesSent int64
@@ -97,7 +98,7 @@ func (m *SessionManager) GetConnection() net.Conn {
 }
 
 // StartPlayback starts a new playback session (non-blocking).
-func (m *SessionManager) StartPlayback(id string, url string, formatStr string) error {
+func (m *SessionManager) StartPlayback(id string, url string, formatStr string, startAtSec float64) error {
 	m.mu.Lock()
 
 	// Stop ALL existing sessions - only one session should play at a time
@@ -122,6 +123,7 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string) 
 		State:    StateIdle,
 		URL:      url,
 		Format:   format,
+		StartAt:  startAtSec,
 		resumeCh: make(chan struct{}, 1),
 	}
 	m.sessions[id] = session
@@ -187,7 +189,7 @@ func (m *SessionManager) runPlayback(session *Session) {
 
 	// Start pipeline
 	fmt.Println("[Session] Starting encoding pipeline...")
-	if err := pipeline.Start(sessionCtx, streamURL, session.Format); err != nil {
+	if err := pipeline.Start(sessionCtx, streamURL, session.Format, session.StartAt); err != nil {
 		session.SetState(StateError)
 		m.sendEvent(session.ID, "error", fmt.Sprintf("pipeline failed: %v", err))
 		return
