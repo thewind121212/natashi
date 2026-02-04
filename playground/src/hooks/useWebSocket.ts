@@ -76,6 +76,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const audioProgressOffsetRef = useRef(0);
   const autoPauseRequestedRef = useRef(false);
   const needsResumeFromRef = useRef(false);
+  const resumeFromRequestedRef = useRef<number | null>(null);
 
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
@@ -195,9 +196,17 @@ export function useWebSocket(): UseWebSocketReturn {
         addLog('nodejs', `Session started: ${msg.session_id}`);
         setIsPlaying(true);
         setIsPaused(false);
-        setPlaybackTime(0);
-        audioProgressOffsetRef.current = 0;
-        lastTickRef.current = Date.now();
+        if (resumeFromRequestedRef.current !== null) {
+          const resumeFrom = resumeFromRequestedRef.current;
+          setPlaybackTime(resumeFrom);
+          audioProgressOffsetRef.current = resumeFrom;
+          lastTickRef.current = Date.now();
+          resumeFromRequestedRef.current = null;
+        } else {
+          setPlaybackTime(0);
+          audioProgressOffsetRef.current = 0;
+          lastTickRef.current = Date.now();
+        }
         audioStartedRef.current = false;
         // Reset audio player for new track (web mode)
         audioPlayerRef.current?.reset();
@@ -442,6 +451,10 @@ export function useWebSocket(): UseWebSocketReturn {
         audioPlayerRef.current?.reset();
         audioStartedRef.current = false;
         const seconds = playbackTimeRef.current;
+        resumeFromRequestedRef.current = seconds;
+        setPlaybackTime(seconds);
+        audioProgressOffsetRef.current = seconds;
+        lastTickRef.current = Date.now();
         wsRef.current?.send(JSON.stringify({ action: 'resumeFrom', seconds }));
       } else {
         wsRef.current?.send(JSON.stringify({ action: 'resume' }));
