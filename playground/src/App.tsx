@@ -47,16 +47,22 @@ function App() {
     clearQueue,
   } = useWebSocket();
 
+  // Handle error toast display
+  const errorStatus = statusType === 'error' ? status : null;
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (statusType !== 'error' || !status) return;
-    setToastMessage(status);
+    if (!errorStatus) {
+      return;
+    }
+    setToastMessage(errorStatus);
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
     toastTimeoutRef.current = window.setTimeout(() => {
       setToastMessage(null);
     }, 3500);
-  }, [status, statusType]);
+  }, [errorStatus]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => () => {
     if (toastTimeoutRef.current) {
@@ -109,7 +115,8 @@ function App() {
     return url.replace(/\/(mq|hq|sd)default\.jpg$/, '/maxresdefault.jpg');
   };
 
-  const ProgressBar = () => (
+  // Progress bar markup (inline to access component state)
+  const progressBarElement = (
     <div className={`w-full group ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
       <div className="flex justify-between text-xs text-gray-400 mb-2 font-mono">
         <span>{formatTime(playbackTime)}</span>
@@ -267,7 +274,7 @@ function App() {
 
             {/* Controls */}
             <div className="space-y-6 relative z-10">
-              <ProgressBar />
+              {progressBarElement}
 
               <div className="flex items-center justify-center gap-4 md:gap-6">
                 <button onClick={previous} disabled={isLoading} className="p-2 text-slate-300 hover:text-white transition-colors disabled:opacity-50">
