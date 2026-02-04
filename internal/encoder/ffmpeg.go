@@ -141,6 +141,8 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 	switch format {
 	case FormatPCM:
 		// Raw PCM output (s16le) - for debug playback
+		// Prepend -re to read input at native frame rate (real-time streaming)
+		args = append([]string{"-re"}, args...)
 		args = append(args,
 			"-f", "s16le",
 			"pipe:1",
