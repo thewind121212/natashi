@@ -22,8 +22,9 @@ func NewAPI(sessions *SessionManager) *API {
 
 // PlayRequest is the request body for play endpoint.
 type PlayRequest struct {
-	URL    string `json:"url" binding:"required"`
-	Format string `json:"format"`
+	URL     string  `json:"url" binding:"required"`
+	Format  string  `json:"format"`
+	StartAt float64 `json:"start_at"`
 }
 
 // PlayResponse is the response for play endpoint.
@@ -96,7 +97,7 @@ func (a *API) Play(c *gin.Context) {
 	fmt.Printf("[API] Play request: session=%s url=%s format=%s\n", sessionID, req.URL, format)
 
 	// Start playback (this is non-blocking now)
-	err := a.sessions.StartPlayback(sessionID, req.URL, format)
+	err := a.sessions.StartPlayback(sessionID, req.URL, format, req.StartAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, PlayResponse{
 			Status:    "error",

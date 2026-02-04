@@ -75,6 +75,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const playbackTimeRef = useRef(0);
   const audioProgressOffsetRef = useRef(0);
   const autoPauseRequestedRef = useRef(false);
+  const needsResumeFromRef = useRef(false);
 
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
@@ -167,6 +168,7 @@ export function useWebSocket(): UseWebSocketReturn {
         if (msg.webMode && msg.isPlaying && !msg.isPaused && !audioPlayerRef.current.isInitialized()) {
           if (!autoPauseRequestedRef.current) {
             autoPauseRequestedRef.current = true;
+            needsResumeFromRef.current = true;
             wsRef.current?.send(JSON.stringify({ action: 'pause' }));
           }
         }
@@ -310,6 +312,7 @@ export function useWebSocket(): UseWebSocketReturn {
         if (!mountedRef.current) return;
         setIsConnected(true);
         autoPauseRequestedRef.current = false;
+        needsResumeFromRef.current = false;
         updateStatusRef.current('Connected to server', 'success');
         addLogRef.current('nodejs', 'WebSocket connected');
       };
@@ -318,6 +321,7 @@ export function useWebSocket(): UseWebSocketReturn {
         if (!mountedRef.current) return;
         setIsConnected(false);
         autoPauseRequestedRef.current = false;
+        needsResumeFromRef.current = false;
         updateStatusRef.current('Disconnected from server', 'error');
 
         if (reconnectTimeoutRef.current) {
@@ -430,9 +434,21 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [addLog]);
 
   const resume = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ action: 'resume' }));
-    addLog('nodejs', 'Resume requested');
-  }, [addLog]);
+    (async () => {
+      if (!(await ensureWebAudioInitialized())) return;
+      const shouldResumeFrom = needsResumeFromRef.current || (webModeRef.current && !audioStartedRef.current);
+      if (shouldResumeFrom) {
+        needsResumeFromRef.current = false;
+        audioPlayerRef.current?.reset();
+        audioStartedRef.current = false;
+        const seconds = playbackTimeRef.current;
+        wsRef.current?.send(JSON.stringify({ action: 'resumeFrom', seconds }));
+      } else {
+        wsRef.current?.send(JSON.stringify({ action: 'resume' }));
+      }
+      addLog('nodejs', 'Resume requested');
+    })();
+  }, [addLog, ensureWebAudioInitialized]);
 
   const clearLogs = useCallback(() => {
     setLogs([]);

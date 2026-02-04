@@ -330,7 +330,25 @@ export class WebSocketHandler {
     }
   }
 
-  private async playTrack(url: string, requestId: number): Promise<void> {
+  private async handleResumeFrom(seconds: number, requestId: number): Promise<void> {
+    const track = this.queueManager.getCurrentTrack();
+    if (!track) {
+      this.log('nodejs', 'No track to resume');
+      return;
+    }
+
+    await this.abortCurrentPlayback();
+
+    this.log('nodejs', `Resuming from ${seconds.toFixed(2)}s: ${track.title}`);
+    this.broadcastJson({
+      type: 'nowPlaying',
+      nowPlaying: track,
+    });
+
+    await this.playTrack(track.url, requestId, seconds);
+  }
+
+  private async playTrack(url: string, requestId: number, startAtSec: number = 0): Promise<void> {
     // Generate new session ID
     const sessionId = generateSessionId();
     this.currentSessionId = sessionId;
@@ -340,7 +358,7 @@ export class WebSocketHandler {
     this.isPaused = false;
     this.isStreamReady = false;
     this.playbackStartAt = null;
-    this.playbackOffsetSec = 0;
+    this.playbackOffsetSec = startAtSec;
 
     this.log('nodejs', `New session: ${sessionId.slice(0, 8)}...`);
     this.log('nodejs', `Starting playback: ${url}`);
@@ -348,7 +366,7 @@ export class WebSocketHandler {
     try {
       // Select format based on mode: web (Opus 256kbps) or pcm (debug)
       const format = this.webMode ? 'web' : 'pcm';
-      const result = await this.apiClient.play(sessionId, url, format);
+      const result = await this.apiClient.play(sessionId, url, format, startAtSec || undefined);
       if (requestId !== this.activePlayRequestId) {
         this.log('nodejs', 'Stale play request, stopping session');
         try {
@@ -585,6 +603,13 @@ export class WebSocketHandler {
 
           this.broadcastJson({ type: 'resumed' });
         }
+      } else if (message.action === 'resumeFrom' && typeof message.seconds === 'number') {
+        const requestId = ++this.playRequestId;
+        this.activePlayRequestId = requestId;
+        const seconds = Math.max(0, message.seconds);
+        this.log('nodejs', `Resume from ${seconds.toFixed(2)}s requested`);
+
+        this.scheduleTransition(requestId, () => this.handleResumeFrom(seconds, requestId));
       }
     } catch (err) {
       this.log('nodejs', `Error handling message: ${err}`);

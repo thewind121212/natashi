@@ -5,7 +5,8 @@ const API_BASE = `http://localhost:${GO_API_PORT}`;
 
 export interface PlayRequest {
   url: string;
-  format?: 'pcm' | 'webm' | 'raw';
+  format?: 'pcm' | 'webm' | 'raw' | 'web';
+  start_at?: number;
 }
 
 export interface ApiResponse {
@@ -51,11 +52,11 @@ export class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  async play(sessionId: string, url: string, format: string = 'pcm'): Promise<ApiResponse> {
+  async play(sessionId: string, url: string, format: string = 'pcm', startAt?: number): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}/session/${sessionId}/play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, format }),
+      body: JSON.stringify({ url, format, start_at: startAt }),
     });
     return response.json() as Promise<ApiResponse>;
   }
