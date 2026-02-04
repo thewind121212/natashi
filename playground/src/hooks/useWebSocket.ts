@@ -85,6 +85,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
+  const audioStartedRef = useRef(false);
 
   // Audio player for web mode (Opus -> Web Audio API)
   const audioPlayer = useAudioPlayer({
@@ -111,6 +112,9 @@ export function useWebSocket(): UseWebSocketReturn {
     setStatus(message);
     setStatusType(type);
   }, []);
+
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const handleMessage = useCallback((msg: WebSocketMessage) => {
     if (!mountedRef.current) return;
@@ -155,6 +159,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setIsPlaying(true);
         setIsPaused(false);
         setPlaybackTime(0);
+        audioStartedRef.current = false;
         // Reset audio player for new track (web mode)
         audioPlayerRef.current?.reset();
         break;
@@ -182,6 +187,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setCurrentUrl(null);
         setNowPlaying(null);
         playStartTimeRef.current = null;
+        audioStartedRef.current = false;
         addLog('nodejs', `Error: ${msg.message}`);
         break;
 
@@ -195,6 +201,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setCurrentUrl(null);
         setNowPlaying(null);
         playStartTimeRef.current = null;
+        audioStartedRef.current = false;
         addLog('nodejs', `Finished (${totalTime}s, ${formatBytes(msg.bytes || 0)})`);
         break;
       }
@@ -207,6 +214,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setCurrentUrl(null);
         setNowPlaying(null);
         playStartTimeRef.current = null;
+        audioStartedRef.current = false;
         addLog('nodejs', 'Playback stopped');
         break;
 
@@ -285,6 +293,12 @@ export function useWebSocket(): UseWebSocketReturn {
         // Handle binary audio data (web mode)
         if (event.data instanceof ArrayBuffer) {
           if (webModeRef.current && audioPlayerRef.current.isInitialized()) {
+            if (!audioStartedRef.current && statusRef.current !== 'Playing') {
+              audioStartedRef.current = true;
+              updateStatusRef.current('Playing', 'success');
+              setIsPlaying(true);
+              setIsPaused(false);
+            }
             audioPlayerRef.current.playChunk(new Uint8Array(event.data));
           }
           return;

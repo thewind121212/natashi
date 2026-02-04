@@ -10,18 +10,20 @@ import (
 
 // FFmpegPipeline implements Pipeline using FFmpeg for decoding and encoding.
 type FFmpegPipeline struct {
-	config Config
-	cmd    *exec.Cmd
-	stdout io.ReadCloser
-	output chan []byte
-	cancel context.CancelFunc
+	config         Config
+	cmd            *exec.Cmd
+	stdout         io.ReadCloser
+	output         chan []byte
+	cancel         context.CancelFunc
+	readBufferSize int
 }
 
 // NewFFmpegPipeline creates a new FFmpeg-based encoding pipeline.
 func NewFFmpegPipeline(config Config) *FFmpegPipeline {
 	return &FFmpegPipeline{
-		config: config,
-		output: make(chan []byte, 30), // Buffer ~600ms for smooth streaming without excessive latency
+		config:         config,
+		output:         make(chan []byte, 30), // Buffer ~600ms for smooth streaming without excessive latency
+		readBufferSize: 16384,
 	}
 }
 
@@ -33,6 +35,13 @@ func NewDefaultPipeline() *FFmpegPipeline {
 // Start begins the encoding pipeline.
 func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format Format) error {
 	ctx, p.cancel = context.WithCancel(ctx)
+
+	switch format {
+	case FormatWeb:
+		p.readBufferSize = 4096
+	default:
+		p.readBufferSize = 16384
+	}
 
 	args := p.buildArgs(streamURL, format)
 	fmt.Printf("[FFmpeg] Starting with format: %s\n", format)
@@ -151,11 +160,11 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 		// Opus encoded for Discord - 128kbps for voice channels
 		args = append(args,
 			"-c:a", "libopus",
-			"-b:a", "128000",            // 128kbps for Discord
-			"-vbr", "on",                // Variable bitrate for better quality
-			"-compression_level", "10",  // Max compression quality
-			"-frame_duration", "20",     // 20ms frames (Discord standard)
-			"-application", "audio",     // Optimize for music
+			"-b:a", "128000", // 128kbps for Discord
+			"-vbr", "on", // Variable bitrate for better quality
+			"-compression_level", "10", // Max compression quality
+			"-frame_duration", "20", // 20ms frames (Discord standard)
+			"-application", "audio", // Optimize for music
 			"-f", "opus",
 			"pipe:1",
 		)
@@ -165,14 +174,14 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 		args = append([]string{"-re"}, args...)
 		args = append(args,
 			"-c:a", "libopus",
-			"-b:a", "256000",            // 256kbps YouTube Premium quality
-			"-vbr", "on",                // Variable bitrate for better quality
-			"-compression_level", "10",  // Max compression quality
-			"-frame_duration", "20",     // 20ms frames
-			"-application", "audio",     // Optimize for music
-			"-f", "ogg",                 // OGG container (same as -f opus but more explicit)
-			"-page_duration", "20000",   // 20ms OGG pages for low latency streaming
-			"-flush_packets", "1",       // Flush output immediately
+			"-b:a", "256000", // 256kbps YouTube Premium quality
+			"-vbr", "on", // Variable bitrate for better quality
+			"-compression_level", "10", // Max compression quality
+			"-frame_duration", "20", // 20ms frames
+			"-application", "audio", // Optimize for music
+			"-f", "ogg", // OGG container (same as -f opus but more explicit)
+			"-page_duration", "20000", // 20ms OGG pages for low latency streaming
+			"-flush_packets", "1", // Flush output immediately
 			"pipe:1",
 		)
 	}
@@ -185,7 +194,7 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	defer close(p.output)
 	defer p.stdout.Close()
 
-	buf := make([]byte, 16384) // Larger buffer for smoother streaming
+	buf := make([]byte, p.readBufferSize)
 	totalBytes := 0
 	chunkCount := 0
 

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
+	"music-bot/internal/buffer"
 	"music-bot/internal/encoder"
 	"music-bot/internal/platform"
 	"music-bot/internal/platform/youtube"
@@ -206,11 +208,22 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 		fmt.Printf("[Session] Streaming finished for %s, sent %d bytes\n", session.ID[:8], session.BytesSent)
 	}()
 
+	output := session.Pipeline.Output()
+	if session.Format == encoder.FormatWeb {
+		paced := buffer.NewPacedBuffer(buffer.Config{
+			Bitrate:     256000,
+			Prebuffer:   500 * time.Millisecond,
+			MaxBuffer:   2 * time.Second,
+			Passthrough: true,
+		})
+		output = paced.Start(ctx, output)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case chunk, ok := <-session.Pipeline.Output():
+		case chunk, ok := <-output:
 			if !ok {
 				return // Channel closed
 			}
