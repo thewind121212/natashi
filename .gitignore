@@ -35,6 +35,10 @@ yarn-error.log*
 *.dylib
 __debug_bin*
 
+/bin
+
+bin
+
 # Test coverage
 coverage/
 *.cover
@@ -47,3 +51,4 @@ coverage/
 
 # TypeScript incremental
 *.tsbuildinfo
+cookies.txt

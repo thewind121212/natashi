@@ -62,12 +62,18 @@ func (e *Extractor) CanHandle(url string) bool {
 
 // ExtractStreamURL extracts the direct audio stream URL from a YouTube URL.
 func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
+	// Format selector optimized for YouTube Premium:
+	// 1. Prefer Opus (251) at 160kbps - YouTube's highest quality audio
+	// 2. Fall back to AAC (140) at 128kbps
+	// 3. Finally any best audio available
+	formatSelector := "bestaudio[acodec=opus]/bestaudio[acodec=aac]/bestaudio"
+
 	args := []string{
 		"--no-playlist",          // single video only
 		"--no-warnings",          // suppress warnings for speed
 		"--no-check-certificate", // skip SSL verification (faster)
 		"--socket-timeout", "10", // shorter timeout
-		"-f", "bestaudio",        // best audio quality available
+		"-f", formatSelector,     // prioritize high-quality codecs
 		"--get-url",              // print direct stream URL only
 	}
 

@@ -4,6 +4,88 @@ import { PassThrough } from 'stream';
 
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
+// Jitter buffer configuration
+const JITTER_BUFFER_SIZE = 5;      // Buffer 5 frames before starting playback
+const FRAME_INTERVAL_MS = 20;       // Output a frame every 20ms (Discord Opus standard)
+
+/**
+ * JitterBuffer smooths out variable audio chunk arrival times.
+ * Buffers incoming chunks and outputs them at consistent intervals.
+ */
+class JitterBuffer {
+  private chunks: Buffer[] = [];
+  private outputStream: PassThrough;
+  private interval: NodeJS.Timeout | null = null;
+  private started = false;
+  private underruns = 0;
+  private consecutiveUnderruns = 0;
+  private totalFrames = 0;
+
+  constructor(outputStream: PassThrough) {
+    this.outputStream = outputStream;
+  }
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+
+    // Start outputting once we have enough buffered frames
+    if (!this.started && this.chunks.length >= JITTER_BUFFER_SIZE) {
+      this.start();
+    }
+  }
+
+  private start(): void {
+    if (this.started) return;
+    this.started = true;
+
+    this.interval = setInterval(() => {
+      this.outputFrame();
+    }, FRAME_INTERVAL_MS);
+  }
+
+  private outputFrame(): void {
+    if (this.outputStream.destroyed) {
+      this.stop();
+      return;
+    }
+
+    const chunk = this.chunks.shift();
+    if (chunk) {
+      // Got data - reset consecutive counter, log recovery if needed
+      if (this.consecutiveUnderruns >= 10) {
+        console.log(`[JitterBuffer] Recovered after ${this.consecutiveUnderruns} underruns`);
+      }
+      this.consecutiveUnderruns = 0;
+      this.totalFrames++;
+      this.outputStream.push(chunk);
+    } else {
+      // Buffer underrun
+      this.underruns++;
+      this.consecutiveUnderruns++;
+      // Only log if sustained underrun (10+ consecutive = 200ms gap)
+      if (this.consecutiveUnderruns === 10) {
+        console.log(`[JitterBuffer] Sustained underrun detected (buffer starved)`);
+      }
+    }
+  }
+
+  stop(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+    this.started = false;
+    this.chunks = [];
+    // Only log if underruns were significant (>1% of frames)
+    if (this.totalFrames > 0 && this.underruns > this.totalFrames * 0.01) {
+      console.log(`[JitterBuffer] Session end: ${this.underruns} underruns / ${this.totalFrames} frames (${(this.underruns / this.totalFrames * 100).toFixed(1)}%)`);
+    }
+    this.underruns = 0;
+    this.consecutiveUnderruns = 0;
+    this.totalFrames = 0;
+  }
+}
+
 export interface Event {
   type: 'ready' | 'error' | 'finished';
   session_id: string;
@@ -20,6 +102,7 @@ export class SocketClient extends EventEmitter {
   private readingAudio = false;
   private audioLength = 0;
   private audioStream: PassThrough | null = null;
+  private jitterBuffer: JitterBuffer | null = null;
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -135,18 +218,18 @@ export class SocketClient extends EventEmitter {
     return this.connected;
   }
 
-  // Create a PassThrough stream for Discord audio playback
+  // Create a PassThrough stream for Discord audio playback with jitter buffering
   createAudioStream(): PassThrough {
-    // End previous stream if exists
-    if (this.audioStream) {
-      this.audioStream.end();
-    }
-    this.audioStream = new PassThrough();
+    // End previous stream and jitter buffer if exists
+    this.endAudioStream();
 
-    // Pipe audio events to the stream
+    this.audioStream = new PassThrough();
+    this.jitterBuffer = new JitterBuffer(this.audioStream);
+
+    // Route audio events through jitter buffer for smooth playback
     const audioHandler = (data: Buffer) => {
-      if (this.audioStream && !this.audioStream.destroyed) {
-        this.audioStream.push(data);
+      if (this.jitterBuffer) {
+        this.jitterBuffer.push(data);
       }
     };
     this.on('audio', audioHandler);
@@ -154,13 +237,21 @@ export class SocketClient extends EventEmitter {
     // Clean up when stream is destroyed
     this.audioStream.on('close', () => {
       this.off('audio', audioHandler);
+      if (this.jitterBuffer) {
+        this.jitterBuffer.stop();
+        this.jitterBuffer = null;
+      }
     });
 
     return this.audioStream;
   }
 
-  // End the current audio stream
+  // End the current audio stream and jitter buffer
   endAudioStream(): void {
+    if (this.jitterBuffer) {
+      this.jitterBuffer.stop();
+      this.jitterBuffer = null;
+    }
     if (this.audioStream) {
       this.audioStream.end();
       this.audioStream = null;

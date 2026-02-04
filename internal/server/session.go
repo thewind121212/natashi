@@ -254,22 +254,18 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 				continue // No connection, skip chunk (will retry on next chunk)
 			}
 
-			// Write length header (4 bytes big-endian)
+			// Coalesce header + chunk into single write to avoid TCP Nagle delays
+			// Header: 4 bytes big-endian length
 			length := uint32(len(chunk))
-			header := []byte{
-				byte(length >> 24),
-				byte(length >> 16),
-				byte(length >> 8),
-				byte(length),
-			}
+			packet := make([]byte, 4+len(chunk))
+			packet[0] = byte(length >> 24)
+			packet[1] = byte(length >> 16)
+			packet[2] = byte(length >> 8)
+			packet[3] = byte(length)
+			copy(packet[4:], chunk)
 
-			if _, err := conn.Write(header); err != nil {
+			if _, err := conn.Write(packet); err != nil {
 				// Connection broken - clear it and wait for reconnect
-				fmt.Printf("[Session] Write error (connection lost): %v\n", err)
-				m.SetConnection(nil)
-				continue
-			}
-			if _, err := conn.Write(chunk); err != nil {
 				fmt.Printf("[Session] Write error (connection lost): %v\n", err)
 				m.SetConnection(nil)
 				continue
