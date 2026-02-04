@@ -87,15 +87,6 @@ export function useWebSocket(): UseWebSocketReturn {
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
   const audioStartedRef = useRef(false);
 
-  // Audio player for web mode (Opus -> Web Audio API)
-  const audioPlayer = useAudioPlayer({
-    onProgress: (seconds) => {
-      if (mountedRef.current) {
-        setPlaybackTime(seconds);
-      }
-    },
-  });
-
   const addLog = useCallback((source: 'go' | 'nodejs', message: string) => {
     if (!mountedRef.current) return;
     const timestamp = new Date().toLocaleTimeString('en-US', {
@@ -112,6 +103,29 @@ export function useWebSocket(): UseWebSocketReturn {
     setStatus(message);
     setStatusType(type);
   }, []);
+
+  // Audio player for web mode (Opus -> Web Audio API)
+  const audioPlayer = useAudioPlayer({
+    onProgress: (seconds) => {
+      if (mountedRef.current) {
+        setPlaybackTime(seconds);
+      }
+    },
+  });
+
+  const ensureWebAudioInitialized = useCallback(async () => {
+    if (!webModeRef.current) return true;
+    if (audioPlayer.isInitialized()) return true;
+    try {
+      await audioPlayer.init();
+      addLog('nodejs', 'Audio player initialized (web mode)');
+      return true;
+    } catch (err) {
+      updateStatus('Failed to initialize audio player', 'error');
+      addLog('nodejs', `Audio init error: ${err}`);
+      return false;
+    }
+  }, [audioPlayer, addLog, updateStatus]);
 
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -341,16 +355,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     // Initialize audio player for web mode (requires user gesture)
-    if (webModeRef.current && !audioPlayer.isInitialized()) {
-      try {
-        await audioPlayer.init();
-        addLog('nodejs', 'Audio player initialized (web mode)');
-      } catch (err) {
-        updateStatus('Failed to initialize audio player', 'error');
-        addLog('nodejs', `Audio init error: ${err}`);
-        return;
-      }
-    }
+    if (!(await ensureWebAudioInitialized())) return;
 
     playStartTimeRef.current = Date.now();
     setCurrentUrl(url.trim());
@@ -407,17 +412,27 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', `Removing track at index ${index}`);
   }, [addLog]);
 
-  const skip = useCallback(() => {
+  const skip = useCallback(async () => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'skip' }));
     updateStatus('Skipping...');
     addLog('nodejs', 'Skip requested');
-  }, [updateStatus, addLog]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
-  const previous = useCallback(() => {
+  const previous = useCallback(async () => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'previous' }));
     updateStatus('Going back...');
     addLog('nodejs', 'Previous requested');
-  }, [updateStatus, addLog]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
   const clearQueue = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'clearQueue' }));
@@ -425,10 +440,15 @@ export function useWebSocket(): UseWebSocketReturn {
     addLog('nodejs', 'Queue cleared');
   }, [updateStatus, addLog]);
 
-  const playFromQueue = useCallback((index: number) => {
+  const playFromQueue = useCallback(async (index: number) => {
+    if (!(await ensureWebAudioInitialized())) return;
+    playStartTimeRef.current = Date.now();
+    setPlaybackTime(0);
+    audioStartedRef.current = false;
+    audioPlayerRef.current?.reset();
     wsRef.current?.send(JSON.stringify({ action: 'playFromQueue', index }));
     addLog('nodejs', `Playing track ${index + 1} from queue`);
-  }, [addLog]);
+  }, [addLog, ensureWebAudioInitialized]);
 
   return {
     isConnected,
