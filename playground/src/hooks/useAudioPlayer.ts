@@ -19,13 +19,17 @@ interface UseAudioPlayerReturn {
  * Based on: Opus 256kbps, 20ms frames, 48kHz stereo
  *
  * - Each chunk ≈ 20ms of audio
- * - Target: 300ms scheduled ahead at all times
- * - Initial buffer: 15 chunks (300ms) before starting
- * - This ensures we never underrun during normal playback
+ * - Initial buffer: 25 chunks (500ms) - larger to handle stream ramp-up
+ * - Target: 400ms scheduled ahead during playback
+ * - Max buffer: 75 chunks (1.5s) - prevents memory overflow on long streams
+ *
+ * Startup stuttering fix: FFmpeg/yt-dlp needs time to "prime" the pipeline,
+ * so chunks arrive slowly at first. Larger initial buffer smooths this out.
  */
-const INITIAL_BUFFER_CHUNKS = 15;  // 15 * 20ms = 300ms
-const MIN_SCHEDULED_AHEAD_SEC = 0.25; // 250ms minimum scheduled ahead
-const TARGET_SCHEDULED_AHEAD_SEC = 0.35; // 350ms target
+const INITIAL_BUFFER_CHUNKS = 25;  // 25 * 20ms = 500ms (smooth startup)
+const MIN_SCHEDULED_AHEAD_SEC = 0.3; // 300ms minimum scheduled ahead
+const TARGET_SCHEDULED_AHEAD_SEC = 0.4; // 400ms target
+const MAX_BUFFER_CHUNKS = 75; // 1.5 seconds max - prevents memory overflow
 
 export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -60,14 +64,20 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
     // Calculate how far ahead we're scheduled
     let scheduledAhead = nextPlayTimeRef.current - now;
 
-    // If we fell behind (shouldn't happen), reset to now + target
+    // If we fell behind, reset timeline smoothly
     if (scheduledAhead < 0) {
-      nextPlayTimeRef.current = now + TARGET_SCHEDULED_AHEAD_SEC;
-      scheduledAhead = TARGET_SCHEDULED_AHEAD_SEC;
+      // Don't jump too far ahead - just get back on track
+      nextPlayTimeRef.current = now + 0.05; // Small 50ms gap to avoid clicks
+      scheduledAhead = 0.05;
     }
 
     // Schedule buffers until we reach target scheduled ahead time
-    while (bufferRef.current.length > 0 && scheduledAhead < TARGET_SCHEDULED_AHEAD_SEC) {
+    // Be more aggressive: schedule up to 2x target if buffer is healthy
+    const scheduleTarget = bufferRef.current.length > INITIAL_BUFFER_CHUNKS
+      ? TARGET_SCHEDULED_AHEAD_SEC * 1.5  // Buffer healthy: schedule more ahead
+      : TARGET_SCHEDULED_AHEAD_SEC;       // Buffer low: normal scheduling
+
+    while (bufferRef.current.length > 0 && scheduledAhead < scheduleTarget) {
       const buffer = bufferRef.current.shift()!;
 
       const source = audioContext.createBufferSource();
@@ -111,6 +121,15 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
 
       // Add to buffer queue
       bufferRef.current.push(buffer);
+
+      // Prevent buffer overflow - drop oldest frames if too far behind
+      // This keeps memory bounded for long streams (2+ hours)
+      if (bufferRef.current.length > MAX_BUFFER_CHUNKS) {
+        const dropCount = bufferRef.current.length - MAX_BUFFER_CHUNKS;
+        bufferRef.current.splice(0, dropCount);
+        // Adjust played time to account for dropped frames
+        playedSecondsRef.current += dropCount * 0.02; // 20ms per frame
+      }
 
       if (!isPlayingRef.current) {
         // Wait for initial buffer to fill
