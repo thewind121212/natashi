@@ -108,8 +108,11 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string) 
 
 	// Determine format
 	format := encoder.FormatPCM
-	if formatStr == "opus" {
+	switch formatStr {
+	case "opus":
 		format = encoder.FormatOpus
+	case "web":
+		format = encoder.FormatWeb
 	}
 
 	session := &Session{

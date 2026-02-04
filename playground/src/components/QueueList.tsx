@@ -38,7 +38,7 @@ function QueueItem({
   isCurrent: boolean;
   onRemove: () => void;
   onPlay: () => void;
-  itemRef?: React.RefObject<HTMLDivElement>;
+  itemRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div

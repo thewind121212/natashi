@@ -13,6 +13,7 @@ function App() {
   const {
     isConnected,
     debugMode,
+    webMode,
     isPaused,
     status,
     statusType,
@@ -61,9 +62,9 @@ function App() {
             <h1 className="text-3xl font-bold text-cyan-400">Audio Playground</h1>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${debugMode ? 'bg-yellow-500' : 'bg-gray-500'}`} />
+                <span className={`h-2 w-2 rounded-full ${webMode ? 'bg-cyan-500' : debugMode ? 'bg-yellow-500' : 'bg-gray-500'}`} />
                 <span className="text-xs text-muted-foreground">
-                  {debugMode ? 'Audio ON' : 'Audio OFF'}
+                  {webMode ? 'Browser Audio' : debugMode ? 'MacBook Audio' : 'Audio OFF'}
                 </span>
               </div>
               <div className="flex items-center gap-2">

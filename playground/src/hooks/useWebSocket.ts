@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { LogEntry } from '@/components/LogViewer';
+import { useAudioPlayer } from './useAudioPlayer';
 
 interface Track {
   url: string;
@@ -12,6 +13,7 @@ interface Track {
 interface WebSocketMessage {
   type: string;
   debugMode?: boolean;
+  webMode?: boolean;
   isPaused?: boolean;
   isPlaying?: boolean;
   session_id?: string;
@@ -27,6 +29,7 @@ interface WebSocketMessage {
 interface UseWebSocketReturn {
   isConnected: boolean;
   debugMode: boolean;
+  webMode: boolean;
   isPaused: boolean;
   status: string;
   statusType: 'normal' | 'error' | 'success';
@@ -66,6 +69,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [webMode, setWebMode] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [statusType, setStatusType] = useState<'normal' | 'error' | 'success'>('normal');
@@ -76,6 +80,15 @@ export function useWebSocket(): UseWebSocketReturn {
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
+
+  // Audio player for web mode (Opus -> Web Audio API)
+  const audioPlayer = useAudioPlayer({
+    onProgress: (seconds) => {
+      if (mountedRef.current) {
+        setPlaybackTime(seconds);
+      }
+    },
+  });
 
   const addLog = useCallback((source: 'go' | 'nodejs', message: string) => {
     if (!mountedRef.current) return;
@@ -107,6 +120,7 @@ export function useWebSocket(): UseWebSocketReturn {
       case 'state':
         // Initial state from server
         setDebugMode(!!msg.debugMode);
+        setWebMode(!!msg.webMode);
         setIsPaused(!!msg.isPaused);
         setIsPlaying(!!msg.isPlaying);
         if (msg.queue) setQueue(msg.queue);
@@ -136,6 +150,8 @@ export function useWebSocket(): UseWebSocketReturn {
         setIsPlaying(true);
         setIsPaused(false);
         setPlaybackTime(0);
+        // Reset audio player for new track (web mode)
+        audioPlayerRef.current?.reset();
         break;
 
       case 'ready': {
@@ -205,9 +221,13 @@ export function useWebSocket(): UseWebSocketReturn {
   const handleMessageRef = useRef(handleMessage);
   const addLogRef = useRef(addLog);
   const updateStatusRef = useRef(updateStatus);
+  const audioPlayerRef = useRef(audioPlayer);
+  const webModeRef = useRef(webMode);
   handleMessageRef.current = handleMessage;
   addLogRef.current = addLog;
   updateStatusRef.current = updateStatus;
+  audioPlayerRef.current = audioPlayer;
+  webModeRef.current = webMode;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -226,6 +246,8 @@ export function useWebSocket(): UseWebSocketReturn {
       const host = window.location.hostname;
       ws = new WebSocket(`${protocol}//${host}:3000`);
       wsRef.current = ws;
+
+      ws.binaryType = 'arraybuffer'; // Enable binary message handling
 
       ws.onopen = () => {
         if (!mountedRef.current) return;
@@ -255,6 +277,15 @@ export function useWebSocket(): UseWebSocketReturn {
       };
 
       ws.onmessage = (event) => {
+        // Handle binary audio data (web mode)
+        if (event.data instanceof ArrayBuffer) {
+          if (webModeRef.current && audioPlayerRef.current.isInitialized()) {
+            audioPlayerRef.current.playChunk(new Uint8Array(event.data));
+          }
+          return;
+        }
+
+        // Handle JSON control messages
         try {
           const msg = JSON.parse(event.data);
           handleMessageRef.current(msg);
@@ -279,7 +310,7 @@ export function useWebSocket(): UseWebSocketReturn {
     };
   }, []);
 
-  const play = useCallback((url: string) => {
+  const play = useCallback(async (url: string) => {
     if (!url.trim()) {
       updateStatus('Please enter a YouTube URL', 'error');
       return;
@@ -290,6 +321,18 @@ export function useWebSocket(): UseWebSocketReturn {
       return;
     }
 
+    // Initialize audio player for web mode (requires user gesture)
+    if (webModeRef.current && !audioPlayer.isInitialized()) {
+      try {
+        await audioPlayer.init();
+        addLog('nodejs', 'Audio player initialized (web mode)');
+      } catch (err) {
+        updateStatus('Failed to initialize audio player', 'error');
+        addLog('nodejs', `Audio init error: ${err}`);
+        return;
+      }
+    }
+
     playStartTimeRef.current = Date.now();
     setCurrentUrl(url.trim());
     updateStatus('Starting...');
@@ -298,7 +341,7 @@ export function useWebSocket(): UseWebSocketReturn {
       action: 'play',
       url: url.trim(),
     }));
-  }, [updateStatus, addLog]);
+  }, [updateStatus, addLog, audioPlayer]);
 
   const stop = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'stop' }));
@@ -371,6 +414,7 @@ export function useWebSocket(): UseWebSocketReturn {
   return {
     isConnected,
     debugMode,
+    webMode,
     isPaused,
     status,
     statusType,

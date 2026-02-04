@@ -10,8 +10,10 @@ type Format string
 const (
 	// FormatPCM outputs raw PCM s16le (for debug playback via ffplay).
 	FormatPCM Format = "pcm"
-	// FormatOpus outputs Opus encoded frames (for Discord voice UDP).
+	// FormatOpus outputs Opus encoded frames (for Discord voice UDP, 128kbps).
 	FormatOpus Format = "opus"
+	// FormatWeb outputs Opus encoded frames for browser playback (256kbps high quality).
+	FormatWeb Format = "web"
 )
 
 // Config holds encoding configuration.

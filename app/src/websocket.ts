@@ -15,6 +15,7 @@ export class WebSocketHandler {
   private currentSessionId: string | null = null;
   private bytesReceived = 0;
   private debugMode: boolean;
+  private webMode: boolean;
   private isPaused = false;
   private isStreamReady = false;
 
@@ -25,7 +26,10 @@ export class WebSocketHandler {
     this.audioPlayer = new AudioPlayer();
     this.queueManager = new QueueManager();
     this.debugMode = process.env.DEBUG_AUDIO === '1';
-    if (this.debugMode) {
+    this.webMode = process.env.WEB_AUDIO === '1';
+    if (this.webMode) {
+      console.log('[WebSocket] Web audio mode enabled via WEB_AUDIO=1');
+    } else if (this.debugMode) {
       console.log('[WebSocket] Debug mode enabled via DEBUG_AUDIO=1');
     }
     this.setupWebSocket();
@@ -46,6 +50,7 @@ export class WebSocketHandler {
       ws.send(JSON.stringify({
         type: 'state',
         debugMode: this.debugMode,
+        webMode: this.webMode,
         isPaused: this.isPaused,
         isPlaying: this.currentSessionId !== null,
         ...this.queueManager.getState(),
@@ -109,19 +114,19 @@ export class WebSocketHandler {
 
         this.bytesReceived += data.length;
 
-        // Log first audio chunk
-        if (this.bytesReceived === data.length) {
-          this.log('nodejs', `First audio chunk: ${data.length} bytes, streamReady=${this.isStreamReady}`);
-        }
-
-        // Play audio if debug mode is enabled and stream is ready
-        if (this.debugMode && this.isStreamReady) {
+        // Route audio based on mode
+        if (this.webMode && this.isStreamReady) {
+          // Web mode: send Opus binary to browser
+          this.broadcastBinary(data);
+        } else if (this.debugMode && this.isStreamReady) {
+          // Debug mode: play PCM via ffplay
           this.audioPlayer.write(data);
         }
 
         // Update browser with progress every ~100KB
-        if (this.bytesReceived % 100000 < data.length) {
-          const playbackSecs = this.bytesReceived / 192000;
+        // Note: Progress tracking in web mode is done by browser's audio player
+        if (!this.webMode && this.bytesReceived % 100000 < data.length) {
+          const playbackSecs = this.bytesReceived / 192000; // PCM: 48kHz * 2ch * 2bytes
           this.broadcastJson({
             type: 'progress',
             bytes: this.bytesReceived,
@@ -174,8 +179,10 @@ export class WebSocketHandler {
     this.log('nodejs', `Starting playback: ${url}`);
 
     try {
-      const result = await this.apiClient.play(sessionId, url, 'pcm');
-      this.log('go', `Play response: ${result.status}`);
+      // Select format based on mode: web (Opus 256kbps) or pcm (debug)
+      const format = this.webMode ? 'web' : 'pcm';
+      const result = await this.apiClient.play(sessionId, url, format);
+      this.log('go', `Play response: ${result.status} (format: ${format})`);
       this.broadcastJson({ type: 'session', session_id: sessionId });
     } catch (err) {
       this.log('nodejs', `Play error: ${err}`);
@@ -199,9 +206,7 @@ export class WebSocketHandler {
     switch (event.type) {
       case 'ready':
         this.isStreamReady = true;
-        this.log('nodejs', `Ready received: debugMode=${this.debugMode}, isPaused=${this.isPaused}`);
-        if (this.debugMode && !this.isPaused) {
-          this.log('nodejs', 'Starting audio player');
+        if (this.debugMode && !this.webMode && !this.isPaused) {
           this.audioPlayer.start();
         }
         this.broadcastJson(event);
@@ -209,7 +214,7 @@ export class WebSocketHandler {
 
       case 'finished':
         this.log('go', `Stream finished, total: ${this.bytesReceived} bytes`);
-        if (this.debugMode) {
+        if (this.debugMode && !this.webMode) {
           this.audioPlayer.end();
         }
         this.currentSessionId = null;
@@ -468,8 +473,8 @@ export class WebSocketHandler {
           // Set flag FIRST - stops audio processing immediately
           this.isPaused = true;
 
-          // Stop audio player immediately (kills ffplay)
-          if (this.debugMode) {
+          // Stop audio player immediately (kills ffplay) - only in debug mode
+          if (this.debugMode && !this.webMode) {
             this.audioPlayer.stop();
           }
 
@@ -493,9 +498,9 @@ export class WebSocketHandler {
             this.log('nodejs', `Resume API error: ${err}`);
           });
 
-          // Set flag and start audio player
+          // Set flag and start audio player (only in debug mode, not web mode)
           this.isPaused = false;
-          if (this.debugMode && this.isStreamReady) {
+          if (this.debugMode && !this.webMode && this.isStreamReady) {
             this.audioPlayer.start();
           }
 
@@ -512,6 +517,14 @@ export class WebSocketHandler {
     for (const client of this.clients) {
       if (client.readyState === 1) {
         client.send(json);
+      }
+    }
+  }
+
+  private broadcastBinary(data: Buffer): void {
+    for (const client of this.clients) {
+      if (client.readyState === 1) {
+        client.send(data, { binary: true });
       }
     }
   }

@@ -2,7 +2,7 @@
 
 ## Title
 
-Add `task:web` mode to stream high-quality Opus audio to web browser via WebSocket
+Add `task run:web` mode to stream high-quality Opus audio to web browser via WebSocket
 
 ## C3 Components Affected
 
@@ -133,24 +133,29 @@ case FormatWeb:
 ```typescript
 // app/src/websocket.ts
 
-// New mode flag
-private playbackMode: 'debug' | 'web' = 'debug';
+// Detect web mode from environment
+private webMode: boolean;
 
-// Handle format selection from browser
-if (message.action === 'play') {
-    const format = message.mode === 'web' ? 'web' : 'pcm';
-    this.playbackMode = message.mode || 'debug';
-    await this.apiClient.play(sessionId, url, format);
+constructor(server: HttpServer) {
+    // ...
+    this.webMode = process.env.WEB_AUDIO === '1';
+    if (this.webMode) {
+        console.log('[WebSocket] Web audio mode enabled via WEB_AUDIO=1');
+    }
 }
+
+// Select format based on mode (in playTrack)
+const format = this.webMode ? 'web' : 'pcm';
+await this.apiClient.play(sessionId, url, format);
 
 // Forward audio based on mode
 this.socketClient.on('audio', (data: Buffer) => {
-    if (this.playbackMode === 'web') {
+    if (this.webMode) {
         // Send binary Opus to browser
         this.broadcastBinary(data);
-    } else {
+    } else if (this.debugMode && this.isStreamReady) {
         // PCM to ffplay (existing flow)
-        this.pcmPlayer.write(data);
+        this.audioPlayer.write(data);
     }
 });
 
@@ -231,42 +236,55 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}) {
 // Handle binary messages (Opus audio)
 ws.binaryType = 'arraybuffer';
 
+// Receive webMode from server initial state
+const [webMode, setWebMode] = useState(false);
+
 ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
-        // Binary Opus data
+        // Binary Opus data (only received in web mode)
         const opusData = new Uint8Array(event.data);
         audioPlayer.playChunk(opusData);
     } else {
         // JSON control message
         const message = JSON.parse(event.data);
+        if (message.type === 'state') {
+            setWebMode(message.webMode);
+            if (message.webMode) {
+                audioPlayer.init(); // Initialize decoder
+            }
+        }
         handleControlMessage(message);
     }
 };
 ```
 
-### 5. UI: Mode Toggle
+### 5. Taskfile: Add run:web Task
 
-```tsx
-// playground/src/components/ModeToggle.tsx
-export function ModeToggle({ mode, onModeChange }) {
-    return (
-        <div className="flex gap-2">
-            <Button
-                variant={mode === 'debug' ? 'default' : 'ghost'}
-                onClick={() => onModeChange('debug')}
-            >
-                MacBook Speaker
-            </Button>
-            <Button
-                variant={mode === 'web' ? 'default' : 'ghost'}
-                onClick={() => onModeChange('web')}
-            >
-                Browser Speaker
-            </Button>
-        </div>
-    );
-}
+```yaml
+# Taskfile.yml
+run:web:
+  desc: Start all servers with WEB mode (audio streams to browser)
+  cmds:
+    - task: kill
+    - |
+      echo "=== Audio Playground (WEB MODE) ==="
+      echo "Audio: Opus 256kbps -> WebSocket -> Browser speakers"
+      echo ""
+    - |
+      set -a
+      [ -f app/.env ] && source app/.env
+      set +a
+      npx concurrently --kill-others --names "Go,Node,Vite" \
+        --prefix-colors "cyan,green,magenta" --prefix "[{name}]" \
+        "go run cmd/playground/main.go" \
+        "cd app && WEB_AUDIO=1 npm run dev" \
+        "cd playground && npx vite --clearScreen false"
 ```
+
+Mode is determined at startup via Taskfile, not a UI toggle:
+- `task run:debug` → PCM to MacBook speakers
+- `task run:web` → Opus 256kbps to browser
+- `task run:bot` → Opus 128kbps to Discord
 
 ## Alternatives Considered
 
@@ -278,15 +296,15 @@ export function ModeToggle({ mode, onModeChange }) {
 ## Acceptance Criteria
 
 - [ ] New `web` format available in Go API
+- [ ] `task run:web` starts servers with `WEB_AUDIO=1`
 - [ ] Browser can play audio through its own speakers
 - [ ] Audio quality is 256kbps Opus (YouTube Premium quality)
 - [ ] Progress bar works correctly (tracks playedSeconds from decoded samples)
-- [ ] Pause/Resume works in browser mode
-- [ ] Skip/Previous works in browser mode
-- [ ] Mode toggle in UI (debug vs web)
+- [ ] Pause/Resume works in web mode
+- [ ] Skip/Previous works in web mode
 - [ ] Progress resets correctly on track change
-- [ ] No regression in debug mode (MacBook speaker)
-- [ ] No regression in Discord bot (Opus 128kbps)
+- [ ] No regression in `task run:debug` (MacBook speaker)
+- [ ] No regression in `task run:bot` (Discord Opus 128kbps)
 
 ## Implementation Plan
 
@@ -297,43 +315,53 @@ export function ModeToggle({ mode, onModeChange }) {
 
 ### Node.js Tasks
 
-- **N1**: Add playback mode tracking in `websocket.ts`
+- **N1**: Add `webMode` detection from `WEB_AUDIO` env var in `websocket.ts`
 - **N2**: Add `broadcastBinary()` method for Opus streaming
-- **N3**: Route audio to browser or ffplay based on mode
-- **N4**: Handle mode in play action
+- **N3**: Route audio to browser (web mode) or ffplay (debug mode)
+- **N4**: Select format based on mode: `web` vs `pcm`
 
 ### Browser Tasks
 
 - **B1**: Add `opus-decoder` dependency (`npm install opus-decoder`)
 - **B2**: Create `useAudioPlayer` hook with Web Audio API + progress tracking
 - **B3**: Update `useWebSocket` to handle binary messages
-- **B4**: Add mode toggle component
-- **B5**: Wire up audio player to WebSocket
+- **B4**: Receive `webMode` in initial state from Node.js
+- **B5**: Initialize audio player only if `webMode === true`
 - **B6**: Connect progress callback to UI state for progress bar
+
+### Taskfile Tasks
+
+- **T1**: Add `run:web` task with `WEB_AUDIO=1` environment variable
 
 ### Integration Tasks
 
-- **I1**: Test full flow: browser play → Opus stream → browser audio
-- **I2**: Test mode switching between debug and web
+- **I1**: Test full flow with `task run:web`: browser play → Opus stream → browser audio
+- **I2**: Verify `task run:debug` still works (regression test)
+- **I3**: Verify `task run:bot` still works (regression test)
 
 ## Testing Plan
 
 **Manual QA - Web Mode:**
-1. Run `task run:debug` (or new `task run:web`)
+1. Run `task run:web`
 2. Open http://localhost:5173
-3. Select "Browser Speaker" mode
-4. Play a YouTube video
-5. Verify:
+3. Play a YouTube video
+4. Verify:
    - Audio plays through browser speakers (not MacBook)
    - Quality sounds good (256kbps)
    - Progress bar works
    - Pause/Resume works
    - Skip works
 
-**Verify no regression:**
-1. Switch to "MacBook Speaker" mode
-2. Verify PCM playback still works
-3. Run Discord bot, verify Opus 128kbps still works
+**Verify no regression - Debug Mode:**
+1. Run `task run:debug`
+2. Open http://localhost:5173
+3. Play a video
+4. Verify audio plays through MacBook speakers
+
+**Verify no regression - Bot Mode:**
+1. Run `task run:bot`
+2. Use Discord bot to play
+3. Verify Opus 128kbps plays in Discord
 
 ## Dependencies
 

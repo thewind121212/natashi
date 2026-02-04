@@ -148,15 +148,31 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format) []string {
 			"pipe:1",
 		)
 	case FormatOpus:
-		// Opus encoded for Discord - OGG container with optimal settings
+		// Opus encoded for Discord - 128kbps for voice channels
 		args = append(args,
 			"-c:a", "libopus",
-			"-b:a", fmt.Sprintf("%d", p.config.Bitrate),
+			"-b:a", "128000",            // 128kbps for Discord
 			"-vbr", "on",                // Variable bitrate for better quality
 			"-compression_level", "10",  // Max compression quality
 			"-frame_duration", "20",     // 20ms frames (Discord standard)
 			"-application", "audio",     // Optimize for music
 			"-f", "opus",
+			"pipe:1",
+		)
+	case FormatWeb:
+		// Opus encoded for browser - 256kbps high quality
+		// Prepend -re to read input at native frame rate (real-time streaming)
+		args = append([]string{"-re"}, args...)
+		args = append(args,
+			"-c:a", "libopus",
+			"-b:a", "256000",            // 256kbps YouTube Premium quality
+			"-vbr", "on",                // Variable bitrate for better quality
+			"-compression_level", "10",  // Max compression quality
+			"-frame_duration", "20",     // 20ms frames
+			"-application", "audio",     // Optimize for music
+			"-f", "ogg",                 // OGG container (same as -f opus but more explicit)
+			"-page_duration", "20000",   // 20ms OGG pages for low latency streaming
+			"-flush_packets", "1",       // Flush output immediately
 			"pipe:1",
 		)
 	}
