@@ -122,8 +122,24 @@ tasks:
     cmds:
       - go build -o bin/playground cmd/playground/main.go
       - cd app && npm run build
-      - cd playground && npm run build
+      - cd playground && VITE_API_BASE_URL="$VITE_API_BASE_URL" VITE_WS_URL="$VITE_WS_URL" npm run build
       - echo "Build complete"
+
+  build:docker:
+    desc: Build single-container Docker image
+    cmds:
+      - |
+        docker build \
+          --build-arg VITE_API_BASE_URL="${VITE_API_BASE_URL}" \
+          --build-arg VITE_WS_URL="${VITE_WS_URL}" \
+          --build-arg RUNTIME_BASE_IMAGE="${RUNTIME_BASE_IMAGE:-linhdevtran99/natashi-base:latest}" \
+          --build-arg INSTALL_MEDIA_TOOLS="${INSTALL_MEDIA_TOOLS}" \
+          -t natashi:latest .
+
+  build:docker:base:
+    desc: Build Docker base image with ffmpeg/yt-dlp
+    cmds:
+      - docker build -f Dockerfile.base -t natashi-runtime-base:latest .
 
   install:
     desc: Install dependencies
