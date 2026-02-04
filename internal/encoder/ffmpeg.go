@@ -21,7 +21,7 @@ type FFmpegPipeline struct {
 func NewFFmpegPipeline(config Config) *FFmpegPipeline {
 	return &FFmpegPipeline{
 		config: config,
-		output: make(chan []byte, 500), // Larger buffer for smoother streaming
+		output: make(chan []byte, 10), // Small buffer (~200ms) for low latency
 	}
 }
 

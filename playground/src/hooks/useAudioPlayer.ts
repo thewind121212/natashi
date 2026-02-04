@@ -83,9 +83,9 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       if (playbackStartedRef.current) {
         const now = audioContext.currentTime;
 
-        // Ensure we have some lead time
-        if (nextPlayTimeRef.current < now + 0.05) {
-          nextPlayTimeRef.current = now + 0.05;
+        // Ensure we have enough lead time to prevent underruns
+        if (nextPlayTimeRef.current < now + 0.15) {
+          nextPlayTimeRef.current = now + 0.15;
         }
 
         while (pendingBuffersRef.current.length > 0) {
