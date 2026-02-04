@@ -13,9 +13,6 @@ interface UseAudioPlayerReturn {
   isInitialized: () => boolean;
 }
 
-// Jitter buffer: collect ~100ms of audio before starting playback
-const JITTER_BUFFER_MS = 100;
-
 export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
   const decoderRef = useRef<OggOpusDecoder | null>(null);
@@ -24,11 +21,6 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const initializedRef = useRef(false);
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
-
-  // Jitter buffer state
-  const pendingBuffersRef = useRef<{ buffer: AudioBuffer; duration: number }[]>([]);
-  const bufferedMsRef = useRef(0);
-  const playbackStartedRef = useRef(false);
 
   const init = useCallback(async () => {
     if (initializedRef.current) return;
@@ -69,39 +61,21 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       buffer.copyToChannel(new Float32Array(channelData[1]), 1);
 
       const duration = samplesDecoded / 48000;
+      const now = audioContext.currentTime;
 
-      // Add to pending buffer
-      pendingBuffersRef.current.push({ buffer, duration });
-      bufferedMsRef.current += duration * 1000;
-
-      // Check if we should start playback
-      if (!playbackStartedRef.current && bufferedMsRef.current >= JITTER_BUFFER_MS) {
-        playbackStartedRef.current = true;
+      // Schedule with lead time to handle chunk bursts from server
+      if (nextPlayTimeRef.current < now + 0.1) {
+        nextPlayTimeRef.current = now + 0.1;
       }
 
-      // Schedule buffers if playback has started
-      if (playbackStartedRef.current) {
-        const now = audioContext.currentTime;
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+      source.start(nextPlayTimeRef.current);
 
-        // Ensure we have enough lead time to prevent underruns
-        if (nextPlayTimeRef.current < now + 0.15) {
-          nextPlayTimeRef.current = now + 0.15;
-        }
-
-        while (pendingBuffersRef.current.length > 0) {
-          const pending = pendingBuffersRef.current.shift()!;
-
-          const source = audioContext.createBufferSource();
-          source.buffer = pending.buffer;
-          source.connect(audioContext.destination);
-          source.start(nextPlayTimeRef.current);
-
-          nextPlayTimeRef.current += pending.duration;
-          playedSecondsRef.current += pending.duration;
-          onProgressRef.current?.(playedSecondsRef.current);
-        }
-        bufferedMsRef.current = 0;
-      }
+      nextPlayTimeRef.current += duration;
+      playedSecondsRef.current += duration;
+      onProgressRef.current?.(playedSecondsRef.current);
     } catch {
       // Decode errors are expected during stream transitions
     }
@@ -110,9 +84,6 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const reset = useCallback(() => {
     playedSecondsRef.current = 0;
     nextPlayTimeRef.current = 0;
-    pendingBuffersRef.current = [];
-    bufferedMsRef.current = 0;
-    playbackStartedRef.current = false;
     decoderRef.current?.reset();
   }, []);
 
