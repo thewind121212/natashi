@@ -326,12 +326,10 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [updateStatus]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/immutability
     audioPlayerRef.current.player = audioPlayer;
   }, [audioPlayer]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/immutability
     webModeRef.current.value = webMode;
   }, [webMode]);
 
@@ -422,6 +420,7 @@ export function useWebSocket(): UseWebSocketReturn {
       }
       wsRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -465,7 +464,7 @@ export function useWebSocket(): UseWebSocketReturn {
       action: 'play',
       url: url.trim(),
     }));
-  }, [updateStatus, addLog, audioPlayer]);
+  }, [updateStatus, addLog, ensureWebAudioInitialized]);
 
   const stop = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'stop' }));
