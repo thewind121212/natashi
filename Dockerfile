@@ -32,11 +32,16 @@ RUN rm -rf app/public && mkdir -p app/public && cp -R playground/dist/* app/publ
 FROM ${RUNTIME_BASE_IMAGE} AS runtime
 
 ARG INSTALL_MEDIA_TOOLS=1
-RUN if [ "${INSTALL_MEDIA_TOOLS}" = "1" ]; then \
-  apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg yt-dlp ca-certificates \
-  && rm -rf /var/lib/apt/lists/*; \
-fi
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+  && if [ "${INSTALL_MEDIA_TOOLS}" = "1" ]; then \
+       apt-get install -y --no-install-recommends ffmpeg yt-dlp; \
+     fi \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
 
 WORKDIR /app
 COPY --from=go-build /out/playground /usr/local/bin/playground
