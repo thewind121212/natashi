@@ -10,7 +10,8 @@ import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 
 const apiClient = new ApiClient();
-const socketClient = new SocketClient();
+// Use shared singleton - same connection as WebSocket handler
+const socketClient = SocketClient.getSharedInstance();
 
 let socketConnected = false;
 
@@ -75,8 +76,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const voiceChannel = member.voice.channel;
     voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
 
-    // Create audio stream and start playing
-    const audioStream = socketClient.createAudioStream();
+    // Create per-guild audio stream (demuxed by guildId)
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     voiceManager.playStream(guildId, audioStream);
 
     // Tell Go to start playback (format: opus for Discord)

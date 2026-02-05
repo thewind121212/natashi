@@ -27,7 +27,8 @@ export class WebSocketHandler {
 
   constructor(server: HttpServer) {
     this.wss = new WebSocketServer({ server });
-    this.socketClient = new SocketClient();
+    // Use shared singleton - same connection as Discord bot
+    this.socketClient = SocketClient.getSharedInstance();
     this.apiClient = new ApiClient();
     this.audioPlayer = new AudioPlayer();
     this.sessionStore = new SessionStore();

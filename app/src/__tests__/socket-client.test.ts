@@ -28,6 +28,13 @@ class TestableSocketClient extends EventEmitter {
         // Reading binary audio data (24-byte session ID + audio)
         if (this.buffer.length >= this.audioLength) {
           const SESSION_ID_LEN = 24;
+          // Defensive check: packet must be at least 24 bytes for session ID
+          if (this.audioLength < SESSION_ID_LEN) {
+            this.buffer = this.buffer.subarray(this.audioLength);
+            this.readingAudio = false;
+            this.emit('malformed', { length: this.audioLength });
+            continue; // Skip malformed packet
+          }
           const sessionId = this.buffer.subarray(0, SESSION_ID_LEN).toString('utf8').trim();
           const audioData = this.buffer.subarray(SESSION_ID_LEN, this.audioLength);
           this.buffer = this.buffer.subarray(this.audioLength);
@@ -322,6 +329,52 @@ describe('SocketClient Buffer Processing', () => {
       client.feedData(Buffer.from('{invalid json}'));
       // Should not crash, event not emitted
       expect(eventHandler).not.toHaveBeenCalled();
+    });
+
+    it('should skip malformed packet with length < 24 bytes', () => {
+      const malformedHandler = vi.fn();
+      client.on('malformed', malformedHandler);
+
+      // Header with length = 10 (less than 24-byte session ID requirement)
+      const header = Buffer.from([0x00, 0x00, 0x00, 0x0a]); // 10 bytes
+      const data = Buffer.alloc(10, 0x42);
+      client.feedData(Buffer.concat([header, data]));
+
+      // Should emit malformed event, not audio
+      expect(audioHandler).not.toHaveBeenCalled();
+      expect(malformedHandler).toHaveBeenCalledTimes(1);
+      expect(malformedHandler).toHaveBeenCalledWith({ length: 10 });
+      expect(client.getBufferLength()).toBe(0); // Buffer consumed
+    });
+
+    it('should continue processing after malformed packet', () => {
+      const malformedHandler = vi.fn();
+      client.on('malformed', malformedHandler);
+
+      // Malformed packet (length = 5)
+      const malformedHeader = Buffer.from([0x00, 0x00, 0x00, 0x05]);
+      const malformedData = Buffer.alloc(5, 0x00);
+
+      // Valid packet after
+      const SESSION_ID_LEN = 24;
+      const validLength = SESSION_ID_LEN + 3;
+      const validHeader = Buffer.from([
+        (validLength >> 24) & 0xff,
+        (validLength >> 16) & 0xff,
+        (validLength >> 8) & 0xff,
+        validLength & 0xff,
+      ]);
+      const sessionId = Buffer.from('valid'.padEnd(SESSION_ID_LEN, ' '));
+      const audioData = Buffer.from([0xaa, 0xbb, 0xcc]);
+
+      client.feedData(Buffer.concat([malformedHeader, malformedData, validHeader, sessionId, audioData]));
+
+      expect(malformedHandler).toHaveBeenCalledTimes(1);
+      expect(audioHandler).toHaveBeenCalledTimes(1);
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'valid',
+        data: Buffer.from([0xaa, 0xbb, 0xcc]),
+      });
     });
 
     it('should handle very large audio packets', () => {
