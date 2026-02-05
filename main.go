@@ -28,6 +28,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Load YouTube config from environment
+	youtube.LoadConfigFromEnv()
+
 	// ─── Step 3: Setup platform registry (Open/Closed Principle) ───
 	registry := platform.NewRegistry()
 	registry.Register(youtube.New())

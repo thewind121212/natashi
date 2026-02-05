@@ -9,6 +9,7 @@ services:
       - .env
     volumes:
       - /tmp/music-bot:/tmp/music-bot
+      - ./cookies.txt:/app/secrets/youtube_cookies.txt:ro
     networks:
       ovh-network:
         ipv4_address: 116.16.1.139

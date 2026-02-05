@@ -18,6 +18,8 @@ type Config struct {
 
 var config Config
 
+const defaultCookiesPath = "/app/secrets/youtube_cookies.txt"
+
 // SetConfig sets the YouTube extractor configuration.
 func SetConfig(c Config) {
 	config = c
@@ -31,6 +33,20 @@ func LoadConfigFromEnv() {
 
 // getCookieArgs returns yt-dlp arguments for cookie authentication.
 func getCookieArgs() []string {
+	cookiesFile := strings.TrimSpace(config.CookiesFile)
+	if cookiesFile != "" {
+		return []string{"--cookies", cookiesFile}
+	}
+
+	cookiesFromBrowser := strings.TrimSpace(config.CookiesFromBrowser)
+	if cookiesFromBrowser != "" {
+		return []string{"--cookies-from-browser", cookiesFromBrowser}
+	}
+
+	if _, err := os.Stat(defaultCookiesPath); err == nil {
+		return []string{"--cookies", defaultCookiesPath}
+	}
+
 	return nil
 }
 
