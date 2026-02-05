@@ -107,16 +107,19 @@ func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
 	// Add cookie args for authenticated access (better quality)
 	args = append(args, getCookieArgs()...)
 
-	// Try bestaudio first (single URL)
-	primaryArgs := append(append([]string{}, args...), "-f", "bestaudio", "--get-url", youtubeURL)
-	url, err := runYtDlpGetURL(primaryArgs)
-	if err == nil {
-		return url, nil
+	// Try common audio format selectors first
+	formatSelectors := []string{"bestaudio/best", "bestaudio", "best"}
+	for _, selector := range formatSelectors {
+		formatArgs := append(append([]string{}, args...), "-f", selector, "--get-url", youtubeURL)
+		url, err := runYtDlpGetURL(formatArgs)
+		if err == nil {
+			return url, nil
+		}
 	}
 
 	// Fallback: no format selector (may return multiple URLs)
 	fallbackArgs := append(append([]string{}, args...), "--get-url", youtubeURL)
-	url, err = runYtDlpGetURL(fallbackArgs)
+	url, err := runYtDlpGetURL(fallbackArgs)
 	if err != nil {
 		return "", err
 	}
