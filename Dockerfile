@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 RUN go build -o /out/playground cmd/playground/main.go
 
-FROM node:20-bookworm AS node-build
+FROM node:22-bookworm AS node-build
 WORKDIR /app
 
 COPY app/package*.json app/

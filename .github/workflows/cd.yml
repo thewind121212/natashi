@@ -29,7 +29,7 @@ jobs:
           build-args: |
             VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
             VITE_WS_URL=${{ secrets.VITE_WS_URL }}
-            RUNTIME_BASE_IMAGE=node:20-bookworm-slim
+            RUNTIME_BASE_IMAGE=node:22-bookworm-slim
             INSTALL_MEDIA_TOOLS=1
 
   deploy:
