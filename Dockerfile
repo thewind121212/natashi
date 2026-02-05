@@ -33,7 +33,7 @@ FROM ${RUNTIME_BASE_IMAGE} AS runtime
 
 ARG INSTALL_MEDIA_TOOLS=1
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+  && apt-get install -y --no-install-recommends curl unzip ca-certificates nodejs \
   && if [ "${INSTALL_MEDIA_TOOLS}" = "1" ]; then \
        apt-get install -y --no-install-recommends ffmpeg yt-dlp; \
      fi \

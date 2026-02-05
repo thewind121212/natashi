@@ -104,6 +104,8 @@ func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
 		"--socket-timeout", "10", // shorter timeout
 	}
 
+	args = append(args, getJsRuntimeArgs()...)
+
 	// Add cookie args for authenticated access (better quality)
 	args = append(args, getCookieArgs()...)
 
@@ -124,6 +126,16 @@ func (e *Extractor) ExtractStreamURL(youtubeURL string) (string, error) {
 		return "", err
 	}
 	return url, nil
+}
+
+func getJsRuntimeArgs() []string {
+	if _, err := exec.LookPath("node"); err == nil {
+		return []string{"--js-runtimes", "node"}
+	}
+	if _, err := exec.LookPath("deno"); err == nil {
+		return []string{"--js-runtimes", "deno"}
+	}
+	return nil
 }
 
 // Metadata holds the JSON output from yt-dlp.
