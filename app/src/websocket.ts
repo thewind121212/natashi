@@ -1,30 +1,27 @@
-import { Server as HttpServer } from 'http';
+import { Server as HttpServer, IncomingMessage } from 'http';
 import { WebSocket, WebSocketServer, RawData } from 'ws';
+import { parse as parseCookie } from 'cookie';
 import { SocketClient, Event } from './socket-client';
 import { ApiClient } from './api-client';
 import { AudioPlayer } from './audio-player';
-import { QueueManager, QueueState } from './queue-manager';
+import { QueueState } from './queue-manager';
+import { SessionStore, UserSession } from './session-store';
+import { verifyToken, JwtPayload } from './auth/jwt';
+
+interface AuthenticatedClient {
+  ws: WebSocket;
+  userId: string;
+}
 
 export class WebSocketHandler {
   private wss: WebSocketServer;
   private socketClient: SocketClient;
   private apiClient: ApiClient;
   private audioPlayer: AudioPlayer;
-  private queueManager: QueueManager;
-  private clients: Set<WebSocket> = new Set();
-  private currentSessionId: string | null = null;
-  private bytesReceived = 0;
+  private sessionStore: SessionStore;
+  private clients: Map<WebSocket, string> = new Map(); // ws -> userId
   private debugMode: boolean;
   private webMode: boolean;
-  private isPaused = false;
-  private isStreamReady = false;
-  private playRequestId = 0;
-  private activePlayRequestId = 0;
-  private playbackStartAt: number | null = null;
-  private playbackOffsetSec = 0;
-  private pendingTransitionTimer: NodeJS.Timeout | null = null;
-  private pendingTransitionRequestId = 0;
-  private suppressAutoAdvanceFor: Set<string> = new Set();
 
   private static readonly TRANSITION_DEBOUNCE_MS = 150;
 
@@ -33,7 +30,7 @@ export class WebSocketHandler {
     this.socketClient = new SocketClient();
     this.apiClient = new ApiClient();
     this.audioPlayer = new AudioPlayer();
-    this.queueManager = new QueueManager();
+    this.sessionStore = new SessionStore();
     this.debugMode = process.env.DEBUG_AUDIO === '1';
     this.webMode = process.env.WEB_AUDIO === '1';
     if (this.webMode) {
@@ -43,40 +40,90 @@ export class WebSocketHandler {
     }
     this.setupWebSocket();
     this.setupAudioPlayer();
-    this.setupQueueManager();
   }
 
-  private log(source: 'go' | 'nodejs', message: string): void {
-    // Web mode: silent operation - focus on music playback only
+  private log(source: 'go' | 'nodejs', message: string, userId?: string): void {
     if (this.webMode) return;
 
-    console.log(`[${source === 'go' ? 'Go' : 'Node'}] ${message}`);
-    this.broadcastJson({ type: 'log', source, message });
+    const prefix = userId ? `[${userId.slice(0, 8)}]` : '';
+    console.log(`[${source === 'go' ? 'Go' : 'Node'}]${prefix} ${message}`);
+
+    // Only broadcast logs to the user's clients if userId is provided
+    if (userId) {
+      this.broadcastJsonToUser(userId, { type: 'log', source, message });
+    }
   }
 
   private setupWebSocket(): void {
-    this.wss.on('connection', (ws) => {
-      this.log('nodejs', 'Browser connected');
-      this.clients.add(ws);
+    this.wss.on('connection', (ws, req) => {
+      // Authenticate via cookie
+      const user = this.authenticateConnection(req);
 
+      if (!user) {
+        console.log('[WebSocket] Unauthorized connection attempt');
+        ws.close(4401, 'Unauthorized');
+        return;
+      }
+
+      console.log(`[WebSocket] User ${user.username} (${user.sub}) connected`);
+
+      // Get or create user session (session ID = Discord user ID)
+      const session = this.sessionStore.getOrCreate(user.sub, user.username, user.avatar);
+
+      // Track this client
+      this.clients.set(ws, user.sub);
+
+      // Setup queue manager event handler for this session
+      this.setupQueueManagerForSession(session);
+
+      // Send initial state for this user's session
       ws.send(JSON.stringify({
         type: 'state',
+        user: { id: user.sub, username: user.username, avatar: user.avatar },
         debugMode: this.debugMode,
         webMode: this.webMode,
-        isPaused: this.isPaused,
-        isPlaying: this.currentSessionId !== null,
-        session_id: this.currentSessionId ?? undefined,
-        playback_secs: this.getPlaybackSeconds(),
-        ...this.queueManager.getState(),
+        isPaused: session.isPaused,
+        isPlaying: session.currentSessionId !== null,
+        session_id: session.currentSessionId ?? undefined,
+        playback_secs: this.getPlaybackSeconds(session),
+        ...session.queueManager.getState(),
       }));
 
-      ws.on('message', (data) => this.handleBrowserMessage(ws, data));
+      ws.on('message', (data) => this.handleBrowserMessage(ws, data, session));
+
       ws.on('close', () => {
-        this.log('nodejs', 'Browser disconnected');
+        console.log(`[WebSocket] User ${user.username} disconnected`);
         this.clients.delete(ws);
+        // Don't cleanup session - user might reconnect
       });
+
       ws.on('error', (err) => {
-        this.log('nodejs', `WebSocket error: ${err.message}`);
+        this.log('nodejs', `WebSocket error: ${err.message}`, user.sub);
+      });
+    });
+  }
+
+  private authenticateConnection(req: IncomingMessage): JwtPayload | null {
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader) return null;
+
+    const cookies = parseCookie(cookieHeader);
+    const token = cookies.auth;
+    if (!token) return null;
+
+    return verifyToken(token);
+  }
+
+  private setupQueueManagerForSession(session: UserSession): void {
+    // Remove existing listeners to prevent duplicates
+    session.queueManager.removeAllListeners('update');
+
+    session.queueManager.on('update', (state: QueueState) => {
+      this.broadcastJsonToUser(session.userId, {
+        type: 'queueUpdated',
+        queue: state.queue,
+        currentIndex: state.currentIndex,
+        nowPlaying: state.nowPlaying,
       });
     });
   }
@@ -87,18 +134,7 @@ export class WebSocketHandler {
     });
 
     this.audioPlayer.on('error', (err: Error) => {
-      this.log('nodejs', `Audio player error: ${err.message}`);
-    });
-  }
-
-  private setupQueueManager(): void {
-    this.queueManager.on('update', (state: QueueState) => {
-      this.broadcastJson({
-        type: 'queueUpdated',
-        queue: state.queue,
-        currentIndex: state.currentIndex,
-        nowPlaying: state.nowPlaying,
-      });
+      console.log(`[Node] Audio player error: ${err.message}`);
     });
   }
 
@@ -106,7 +142,7 @@ export class WebSocketHandler {
     // First check if Go API is healthy
     try {
       const health = await this.apiClient.health();
-      this.log('nodejs', `Go API health: ${health.status}`);
+      console.log(`[Node] Go API health: ${health.status}`);
     } catch (err) {
       throw new Error('Go API not available. Start Go server first.');
     }
@@ -114,526 +150,488 @@ export class WebSocketHandler {
     // Then connect socket for audio
     try {
       await this.socketClient.connect();
-      this.log('nodejs', 'Connected to Go socket (audio)');
+      console.log('[Node] Connected to Go socket (audio)');
 
       this.socketClient.on('event', (event: Event) => {
         this.handleGoEvent(event);
       });
 
       this.socketClient.on('audio', (data: Buffer) => {
-        // Skip if paused or no active session
-        if (this.isPaused || !this.currentSessionId) {
-          return;
-        }
+        this.handleAudioData(data);
+      });
 
-        this.bytesReceived += data.length;
-
-        // Route audio based on mode
-        if (this.webMode && this.isStreamReady) {
-          // Web mode: pass through to browser (client handles buffering)
-          this.broadcastBinary(data);
-        } else if (this.debugMode && this.isStreamReady) {
-          // Debug mode: play PCM via ffplay
-          this.audioPlayer.write(data);
-        }
-
-        // Update browser with progress every ~100KB
-        // Note: Progress tracking in web mode is done by browser's audio player
-        if (!this.webMode && this.bytesReceived % 100000 < data.length) {
-          const playbackSecs = this.bytesReceived / 192000; // PCM: 48kHz * 2ch * 2bytes
-          this.broadcastJson({
-            type: 'progress',
-            bytes: this.bytesReceived,
-            playback_secs: playbackSecs,
+      this.socketClient.on('close', () => {
+        console.log('[Go] Socket connection closed');
+        // Reset all sessions
+        for (const session of this.sessionStore.getAll()) {
+          this.resetPlaybackState(session);
+          this.broadcastJsonToUser(session.userId, {
+            type: 'error',
+            session_id: '',
+            message: 'Server disconnected'
           });
         }
       });
 
-      this.socketClient.on('close', () => {
-        this.log('go', 'Socket connection closed');
-        this.resetPlaybackState();
-        this.broadcastJson({ type: 'error', session_id: '', message: 'Server disconnected' });
-      });
-
     } catch (err) {
-      this.log('nodejs', `Failed to connect to Go socket: ${err}`);
+      console.log(`[Node] Failed to connect to Go socket: ${err}`);
       throw err;
     }
   }
 
-  private resetPlaybackState(): void {
-    this.audioPlayer.stop();
-    this.currentSessionId = null;
-    this.isPaused = false;
-    this.isStreamReady = false;
-    this.bytesReceived = 0;
-    this.playbackStartAt = null;
-    this.playbackOffsetSec = 0;
-    if (this.pendingTransitionTimer) {
-      clearTimeout(this.pendingTransitionTimer);
-      this.pendingTransitionTimer = null;
+  private handleAudioData(data: Buffer): void {
+    // Find which user session this audio belongs to
+    // For now, route to the session that has an active sessionId
+    // In the future, Go could send session ID in audio packets
+
+    for (const session of this.sessionStore.getAll()) {
+      if (!session.currentSessionId || session.isPaused) continue;
+
+      session.bytesReceived += data.length;
+
+      // Route audio based on mode
+      if (this.webMode && session.isStreamReady) {
+        this.broadcastBinaryToUser(session.userId, data);
+      } else if (this.debugMode && session.isStreamReady) {
+        this.audioPlayer.write(data);
+      }
+
+      // Update progress every ~100KB (non-web mode)
+      if (!this.webMode && session.bytesReceived % 100000 < data.length) {
+        const playbackSecs = session.bytesReceived / 192000;
+        this.broadcastJsonToUser(session.userId, {
+          type: 'progress',
+          bytes: session.bytesReceived,
+          playback_secs: playbackSecs,
+        });
+      }
+
+      // Currently only one session streams at a time, so break after finding one
+      break;
     }
-    this.pendingTransitionRequestId = 0;
   }
 
-  private getPlaybackSeconds(): number {
-    if (this.playbackStartAt) {
-      return this.playbackOffsetSec + (Date.now() - this.playbackStartAt) / 1000;
+  private resetPlaybackState(session: UserSession): void {
+    if (this.debugMode && !this.webMode) {
+      this.audioPlayer.stop();
     }
-    return this.playbackOffsetSec;
+    session.currentSessionId = null;
+    session.isPaused = false;
+    session.isStreamReady = false;
+    session.bytesReceived = 0;
+    session.playbackStartAt = null;
+    session.playbackOffsetSec = 0;
+    if (session.pendingTransitionTimer) {
+      clearTimeout(session.pendingTransitionTimer);
+      session.pendingTransitionTimer = null;
+    }
+    session.pendingTransitionRequestId = 0;
   }
 
-  private async abortCurrentPlayback(): Promise<void> {
-    if (this.currentSessionId) {
-      this.suppressAutoAdvanceFor.add(this.currentSessionId);
+  private getPlaybackSeconds(session: UserSession): number {
+    if (session.playbackStartAt) {
+      return session.playbackOffsetSec + (Date.now() - session.playbackStartAt) / 1000;
+    }
+    return session.playbackOffsetSec;
+  }
+
+  private async abortCurrentPlayback(session: UserSession): Promise<void> {
+    if (session.currentSessionId) {
+      session.suppressAutoAdvanceFor.add(session.currentSessionId);
       try {
-        await this.apiClient.stop(this.currentSessionId);
+        await this.apiClient.stop(session.currentSessionId);
       } catch (err) {
-        this.log('nodejs', `Stop error (ignored): ${err}`);
+        this.log('nodejs', `Stop error (ignored): ${err}`, session.userId);
       }
     }
-    this.resetPlaybackState();
+    this.resetPlaybackState(session);
   }
 
-  private scheduleTransition(requestId: number, action: () => Promise<void>): void {
-    if (this.pendingTransitionTimer) {
-      clearTimeout(this.pendingTransitionTimer);
+  private scheduleTransition(session: UserSession, requestId: number, action: () => Promise<void>): void {
+    if (session.pendingTransitionTimer) {
+      clearTimeout(session.pendingTransitionTimer);
     }
-    this.pendingTransitionRequestId = requestId;
-    this.pendingTransitionTimer = setTimeout(() => {
-      this.pendingTransitionTimer = null;
-      if (requestId !== this.activePlayRequestId || requestId !== this.pendingTransitionRequestId) {
+    session.pendingTransitionRequestId = requestId;
+    session.pendingTransitionTimer = setTimeout(() => {
+      session.pendingTransitionTimer = null;
+      if (requestId !== session.activePlayRequestId || requestId !== session.pendingTransitionRequestId) {
         return;
       }
       action().catch((err) => {
-        this.log('nodejs', `Transition error: ${err}`);
+        this.log('nodejs', `Transition error: ${err}`, session.userId);
       });
     }, WebSocketHandler.TRANSITION_DEBOUNCE_MS);
   }
 
-  private async handlePlayUrl(url: string, requestId: number): Promise<void> {
-    const nowPlaying = this.queueManager.getCurrentTrack();
-    if (this.currentSessionId && nowPlaying && this.extractVideoId(nowPlaying.url) === this.extractVideoId(url)) {
-      this.log('nodejs', 'Same video already playing, ignoring');
+  private async handlePlayUrl(session: UserSession, url: string, requestId: number): Promise<void> {
+    const nowPlaying = session.queueManager.getCurrentTrack();
+    if (session.currentSessionId && nowPlaying && this.extractVideoId(nowPlaying.url) === this.extractVideoId(url)) {
+      this.log('nodejs', 'Same video already playing, ignoring', session.userId);
       return;
     }
 
-    await this.abortCurrentPlayback();
+    await this.abortCurrentPlayback(session);
 
-    // Check if it's the same video already playing
-    // Fetch metadata to check if it's a playlist
     try {
       const metadata = await this.apiClient.getMetadata(url);
-      if (requestId !== this.activePlayRequestId) return;
+      if (requestId !== session.activePlayRequestId) return;
 
       if (metadata.is_playlist) {
-        // It's a playlist - extract all videos and add to queue
-        this.log('nodejs', 'Detected playlist, extracting videos...');
-        this.broadcastJson({ type: 'status', message: 'Loading playlist...' });
+        this.log('nodejs', 'Detected playlist, extracting videos...', session.userId);
+        this.broadcastJsonToUser(session.userId, { type: 'status', message: 'Loading playlist...' });
 
         const playlist = await this.apiClient.getPlaylist(url);
-        if (requestId !== this.activePlayRequestId) return;
+        if (requestId !== session.activePlayRequestId) return;
         if (playlist.error) {
-          this.broadcastJson({ type: 'error', message: playlist.error });
+          this.broadcastJsonToUser(session.userId, { type: 'error', message: playlist.error });
           return;
         }
 
-        this.log('nodejs', `Found ${playlist.count} videos in playlist`);
+        this.log('nodejs', `Found ${playlist.count} videos in playlist`, session.userId);
 
-        // Add all videos to queue
         for (const entry of playlist.entries) {
-          this.queueManager.addTrack(
-            entry.url,
-            entry.title,
-            entry.duration,
-            entry.thumbnail
-          );
+          session.queueManager.addTrack(entry.url, entry.title, entry.duration, entry.thumbnail);
         }
 
-        const firstTrack = this.queueManager.startPlaying(0);
+        const firstTrack = session.queueManager.startPlaying(0);
         if (firstTrack) {
-          this.broadcastJson({
-            type: 'nowPlaying',
-            nowPlaying: firstTrack,
-          });
-          await this.playTrack(firstTrack.url, requestId);
+          this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: firstTrack });
+          await this.playTrack(session, firstTrack.url, requestId);
         }
       } else {
-        // Single video - add to queue and play
-        this.queueManager.addTrack(
-          url,
-          metadata.title,
-          metadata.duration,
-          metadata.thumbnail
-        );
-
-        const track = this.queueManager.startPlaying(this.queueManager.getQueue().length - 1);
+        session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
+        const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
         if (track) {
-          this.broadcastJson({
-            type: 'nowPlaying',
-            nowPlaying: track,
-          });
-          await this.playTrack(track.url, requestId);
+          this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
+          await this.playTrack(session, track.url, requestId);
         }
       }
     } catch (err) {
-      this.log('nodejs', `Failed to process URL: ${err}`);
-      this.broadcastJson({ type: 'error', message: `Failed to process URL: ${err}` });
+      this.log('nodejs', `Failed to process URL: ${err}`, session.userId);
+      this.broadcastJsonToUser(session.userId, { type: 'error', message: `Failed to process URL: ${err}` });
     }
   }
 
-  private async handlePlayFromQueue(index: number, requestId: number): Promise<void> {
-    if (this.currentSessionId && index === this.queueManager.getState().currentIndex) {
-      this.log('nodejs', 'Same queue index already playing, ignoring');
+  private async handlePlayFromQueue(session: UserSession, index: number, requestId: number): Promise<void> {
+    if (session.currentSessionId && index === session.queueManager.getState().currentIndex) {
+      this.log('nodejs', 'Same queue index already playing, ignoring', session.userId);
       return;
     }
 
-    await this.abortCurrentPlayback();
+    await this.abortCurrentPlayback(session);
 
-    // Now update queue and get track
-    const track = this.queueManager.startPlaying(index);
+    const track = session.queueManager.startPlaying(index);
     if (track) {
-      this.log('nodejs', `Playing from queue: ${track.title}`);
-
-      // Broadcast now playing
-      this.broadcastJson({
-        type: 'nowPlaying',
-        nowPlaying: track,
-      });
-
-      await this.playTrack(track.url, requestId);
+      this.log('nodejs', `Playing from queue: ${track.title}`, session.userId);
+      this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
+      await this.playTrack(session, track.url, requestId);
     } else {
-      this.log('nodejs', `Invalid queue index: ${index}`);
+      this.log('nodejs', `Invalid queue index: ${index}`, session.userId);
     }
   }
 
-  private async handleSkip(requestId: number): Promise<void> {
-    await this.abortCurrentPlayback();
+  private async handleSkip(session: UserSession, requestId: number): Promise<void> {
+    await this.abortCurrentPlayback(session);
 
-    const nextTrack = this.queueManager.skip();
+    const nextTrack = session.queueManager.skip();
     if (nextTrack) {
-      await this.playTrack(nextTrack.url, requestId);
+      await this.playTrack(session, nextTrack.url, requestId);
     } else {
-      this.log('nodejs', 'No more tracks in queue');
-      this.broadcastJson({ type: 'queueFinished' });
+      this.log('nodejs', 'No more tracks in queue', session.userId);
+      this.broadcastJsonToUser(session.userId, { type: 'queueFinished' });
     }
   }
 
-  private async handlePrevious(requestId: number): Promise<void> {
-    await this.abortCurrentPlayback();
+  private async handlePrevious(session: UserSession, requestId: number): Promise<void> {
+    await this.abortCurrentPlayback(session);
 
-    const prevTrack = this.queueManager.previous();
+    const prevTrack = session.queueManager.previous();
     if (prevTrack) {
-      await this.playTrack(prevTrack.url, requestId);
+      await this.playTrack(session, prevTrack.url, requestId);
     } else {
-      this.log('nodejs', 'Already at start of queue');
+      this.log('nodejs', 'Already at start of queue', session.userId);
     }
   }
 
-  private async handleResumeFrom(seconds: number, requestId: number): Promise<void> {
-    const track = this.queueManager.getCurrentTrack();
+  private async handleResumeFrom(session: UserSession, seconds: number, requestId: number): Promise<void> {
+    const track = session.queueManager.getCurrentTrack();
     if (!track) {
-      this.log('nodejs', 'No track to resume');
+      this.log('nodejs', 'No track to resume', session.userId);
       return;
     }
 
-    await this.abortCurrentPlayback();
+    await this.abortCurrentPlayback(session);
 
-    this.log('nodejs', `Resuming from ${seconds.toFixed(2)}s: ${track.title}`);
-    this.broadcastJson({
-      type: 'nowPlaying',
-      nowPlaying: track,
-    });
-
-    await this.playTrack(track.url, requestId, seconds);
+    this.log('nodejs', `Resuming from ${seconds.toFixed(2)}s: ${track.title}`, session.userId);
+    this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
+    await this.playTrack(session, track.url, requestId, seconds);
   }
 
-  private async playTrack(url: string, requestId: number, startAtSec: number = 0): Promise<void> {
-    // Generate new session ID
-    const sessionId = generateSessionId();
-    this.currentSessionId = sessionId;
+  private async playTrack(session: UserSession, url: string, requestId: number, startAtSec: number = 0): Promise<void> {
+    // Use Discord user ID as session ID for Go API
+    const sessionId = session.userId;
+    session.currentSessionId = sessionId;
 
     // Reset state for new session
-    this.bytesReceived = 0;
-    this.isPaused = false;
-    this.isStreamReady = false;
-    this.playbackStartAt = null;
-    this.playbackOffsetSec = startAtSec;
+    session.bytesReceived = 0;
+    session.isPaused = false;
+    session.isStreamReady = false;
+    session.playbackStartAt = null;
+    session.playbackOffsetSec = startAtSec;
 
-    this.log('nodejs', `New session: ${sessionId.slice(0, 8)}...`);
-    this.log('nodejs', `Starting playback: ${url}`);
+    this.log('nodejs', `Session: ${sessionId.slice(0, 8)}...`, session.userId);
+    this.log('nodejs', `Starting playback: ${url}`, session.userId);
 
     try {
-      // Select format based on mode: web (Opus 256kbps) or pcm (debug)
       const format = this.webMode ? 'web' : 'pcm';
       const result = await this.apiClient.play(sessionId, url, format, startAtSec || undefined);
-      if (requestId !== this.activePlayRequestId) {
-        this.log('nodejs', 'Stale play request, stopping session');
+
+      if (requestId !== session.activePlayRequestId) {
+        this.log('nodejs', 'Stale play request, stopping session', session.userId);
         try {
           await this.apiClient.stop(sessionId);
         } catch {
           // Ignore stop errors for stale sessions
         }
-        if (this.currentSessionId === sessionId) {
-          this.currentSessionId = null;
+        if (session.currentSessionId === sessionId) {
+          session.currentSessionId = null;
         }
         return;
       }
-      this.log('go', `Play response: ${result.status} (format: ${format})`);
-      this.broadcastJson({ type: 'session', session_id: sessionId });
+
+      this.log('go', `Play response: ${result.status} (format: ${format})`, session.userId);
+      this.broadcastJsonToUser(session.userId, { type: 'session', session_id: sessionId });
     } catch (err) {
-      this.log('nodejs', `Play error: ${err}`);
-      this.currentSessionId = null;
-      this.broadcastJson({ type: 'error', session_id: sessionId, message: `${err}` });
+      this.log('nodejs', `Play error: ${err}`, session.userId);
+      session.currentSessionId = null;
+      this.broadcastJsonToUser(session.userId, { type: 'error', session_id: sessionId, message: `${err}` });
     }
   }
 
   private handleGoEvent(event: Event): void {
-    // IMPORTANT: Ignore events from old sessions
-    const eventSessionShort = event.session_id ? event.session_id.slice(0, 8) : 'none';
-    const currentSessionShort = this.currentSessionId ? this.currentSessionId.slice(0, 8) : 'none';
+    // Find the user session that owns this event
+    const session = event.session_id ? this.sessionStore.findBySessionId(event.session_id) : undefined;
 
-    this.log('go', `Event: ${event.type} (event=${eventSessionShort}, current=${currentSessionShort})`);
-
-    if (event.session_id && this.currentSessionId && event.session_id !== this.currentSessionId) {
-      this.log('go', `Ignoring - session mismatch`);
+    if (!session) {
+      // No matching session found - this could be from an old session
+      console.log(`[Go] Event ${event.type} for unknown session ${event.session_id?.slice(0, 8) || 'none'}`);
       return;
     }
 
+    const eventSessionShort = event.session_id ? event.session_id.slice(0, 8) : 'none';
+    this.log('go', `Event: ${event.type} (session=${eventSessionShort})`, session.userId);
+
     switch (event.type) {
       case 'ready':
-        this.isStreamReady = true;
-        if (!this.isPaused) {
-          this.playbackStartAt = Date.now();
+        session.isStreamReady = true;
+        if (!session.isPaused) {
+          session.playbackStartAt = Date.now();
         }
-        if (this.debugMode && !this.webMode && !this.isPaused) {
+        if (this.debugMode && !this.webMode && !session.isPaused) {
           this.audioPlayer.start();
         }
-        this.broadcastJson(event);
+        this.broadcastJsonToUser(session.userId, event);
         break;
 
       case 'finished':
-        this.log('go', `Stream finished, total: ${this.bytesReceived} bytes`);
+        this.log('go', `Stream finished, total: ${session.bytesReceived} bytes`, session.userId);
         if (this.debugMode && !this.webMode) {
           this.audioPlayer.end();
         }
-        this.currentSessionId = null;
-        this.isStreamReady = false;
-        this.playbackStartAt = null;
-        this.playbackOffsetSec = 0;
-        this.broadcastJson({ ...event, bytes: this.bytesReceived });
+        session.currentSessionId = null;
+        session.isStreamReady = false;
+        session.playbackStartAt = null;
+        session.playbackOffsetSec = 0;
+        this.broadcastJsonToUser(session.userId, { ...event, bytes: session.bytesReceived });
 
-        if (event.session_id && this.suppressAutoAdvanceFor.has(event.session_id)) {
-          this.suppressAutoAdvanceFor.delete(event.session_id);
-          this.log('nodejs', 'Auto-advance suppressed for stopped session');
+        if (event.session_id && session.suppressAutoAdvanceFor.has(event.session_id)) {
+          session.suppressAutoAdvanceFor.delete(event.session_id);
+          this.log('nodejs', 'Auto-advance suppressed for stopped session', session.userId);
           break;
         }
 
-        // Auto-advance to next track in queue
-        const nextTrack = this.queueManager.currentFinished();
+        // Auto-advance to next track
+        const nextTrack = session.queueManager.currentFinished();
         if (nextTrack) {
-          this.log('nodejs', `Auto-advancing to next track: ${nextTrack.title}`);
-          const requestId = ++this.playRequestId;
-          this.activePlayRequestId = requestId;
-          this.playTrack(nextTrack.url, requestId);
+          this.log('nodejs', `Auto-advancing to next track: ${nextTrack.title}`, session.userId);
+          const requestId = ++session.playRequestId;
+          session.activePlayRequestId = requestId;
+          this.playTrack(session, nextTrack.url, requestId);
         } else {
-          this.log('nodejs', 'Queue finished');
-          this.broadcastJson({ type: 'queueFinished' });
+          this.log('nodejs', 'Queue finished', session.userId);
+          this.broadcastJsonToUser(session.userId, { type: 'queueFinished' });
         }
         break;
 
       case 'error':
-        this.log('go', `Error: ${event.message}`);
-        this.resetPlaybackState();
-        this.broadcastJson(event);
+        this.log('go', `Error: ${event.message}`, session.userId);
+        this.resetPlaybackState(session);
+        this.broadcastJsonToUser(session.userId, event);
         break;
 
       default:
-        this.broadcastJson(event);
+        this.broadcastJsonToUser(session.userId, event);
     }
   }
 
-  private async handleBrowserMessage(ws: WebSocket, data: RawData): Promise<void> {
+  private async handleBrowserMessage(ws: WebSocket, data: RawData, session: UserSession): Promise<void> {
     try {
       const message = JSON.parse(data.toString());
-      this.log('nodejs', `Browser action: ${message.action || message.type}`);
+      this.log('nodejs', `Browser action: ${message.action || message.type}`, session.userId);
 
       if (message.action === 'play' && message.url) {
-        const requestId = ++this.playRequestId;
-        this.activePlayRequestId = requestId;
+        const requestId = ++session.playRequestId;
+        session.activePlayRequestId = requestId;
         const url = message.url.trim();
-
-        this.scheduleTransition(requestId, () => this.handlePlayUrl(url, requestId));
+        this.scheduleTransition(session, requestId, () => this.handlePlayUrl(session, url, requestId));
 
       } else if (message.action === 'addToQueue' && message.url) {
-        // Add to queue
-        this.log('nodejs', `Adding to queue: ${message.url}`);
+        this.log('nodejs', `Adding to queue: ${message.url}`, session.userId);
         try {
           const metadata = await this.apiClient.getMetadata(message.url);
           if (metadata.error) {
-            this.broadcastJson({ type: 'error', message: metadata.error });
+            this.broadcastJsonToUser(session.userId, { type: 'error', message: metadata.error });
             return;
           }
-          this.queueManager.addTrack(
-            message.url,
-            metadata.title,
-            metadata.duration,
-            metadata.thumbnail
-          );
-          this.log('nodejs', `Added to queue: ${metadata.title}`);
+          session.queueManager.addTrack(message.url, metadata.title, metadata.duration, metadata.thumbnail);
+          this.log('nodejs', `Added to queue: ${metadata.title}`, session.userId);
 
-          // If nothing is playing, start playing
-          if (!this.currentSessionId) {
-            const track = this.queueManager.startPlaying(0);
+          if (!session.currentSessionId) {
+            const track = session.queueManager.startPlaying(0);
             if (track) {
-              const requestId = ++this.playRequestId;
-              this.activePlayRequestId = requestId;
-              await this.playTrack(track.url, requestId);
+              const requestId = ++session.playRequestId;
+              session.activePlayRequestId = requestId;
+              await this.playTrack(session, track.url, requestId);
             }
           }
         } catch (err) {
-          this.log('nodejs', `Failed to get metadata: ${err}`);
-          this.broadcastJson({ type: 'error', message: `Failed to get metadata: ${err}` });
+          this.log('nodejs', `Failed to get metadata: ${err}`, session.userId);
+          this.broadcastJsonToUser(session.userId, { type: 'error', message: `Failed to get metadata: ${err}` });
         }
 
       } else if (message.action === 'removeFromQueue' && typeof message.index === 'number') {
-        // Remove from queue
-        const removed = this.queueManager.removeTrack(message.index);
+        const removed = session.queueManager.removeTrack(message.index);
         if (removed) {
-          this.log('nodejs', `Removed track at index ${message.index}`);
+          this.log('nodejs', `Removed track at index ${message.index}`, session.userId);
         }
 
       } else if (message.action === 'playFromQueue' && typeof message.index === 'number') {
-        const requestId = ++this.playRequestId;
-        this.activePlayRequestId = requestId;
-        // Play specific track from queue
-        this.log('nodejs', `playFromQueue: index=${message.index}`);
-
-        this.scheduleTransition(requestId, () => this.handlePlayFromQueue(message.index, requestId));
+        const requestId = ++session.playRequestId;
+        session.activePlayRequestId = requestId;
+        this.log('nodejs', `playFromQueue: index=${message.index}`, session.userId);
+        this.scheduleTransition(session, requestId, () => this.handlePlayFromQueue(session, message.index, requestId));
 
       } else if (message.action === 'skip') {
-        const requestId = ++this.playRequestId;
-        this.activePlayRequestId = requestId;
-        // Skip to next track
-        this.log('nodejs', 'Skip requested');
-
-        this.scheduleTransition(requestId, () => this.handleSkip(requestId));
+        const requestId = ++session.playRequestId;
+        session.activePlayRequestId = requestId;
+        this.log('nodejs', 'Skip requested', session.userId);
+        this.scheduleTransition(session, requestId, () => this.handleSkip(session, requestId));
 
       } else if (message.action === 'previous') {
-        const requestId = ++this.playRequestId;
-        this.activePlayRequestId = requestId;
-        // Go to previous track
-        this.log('nodejs', 'Previous requested');
-
-        this.scheduleTransition(requestId, () => this.handlePrevious(requestId));
+        const requestId = ++session.playRequestId;
+        session.activePlayRequestId = requestId;
+        this.log('nodejs', 'Previous requested', session.userId);
+        this.scheduleTransition(session, requestId, () => this.handlePrevious(session, requestId));
 
       } else if (message.action === 'clearQueue') {
-        // Clear queue and stop
-        this.log('nodejs', 'Clearing queue');
-        if (this.currentSessionId) {
+        this.log('nodejs', 'Clearing queue', session.userId);
+        if (session.currentSessionId) {
           try {
-            await this.apiClient.stop(this.currentSessionId);
+            await this.apiClient.stop(session.currentSessionId);
           } catch (err) {
-            this.log('nodejs', `Stop error: ${err}`);
+            this.log('nodejs', `Stop error: ${err}`, session.userId);
           }
         }
-        this.resetPlaybackState();
-        this.queueManager.clear();
-        this.broadcastJson({ type: 'stopped' });
+        this.resetPlaybackState(session);
+        session.queueManager.clear();
+        this.broadcastJsonToUser(session.userId, { type: 'stopped' });
 
       } else if (message.action === 'getQueue') {
-        // Return current queue state
         ws.send(JSON.stringify({
           type: 'queueUpdated',
-          ...this.queueManager.getState(),
+          ...session.queueManager.getState(),
         }));
 
       } else if (message.action === 'stop') {
-        if (this.currentSessionId) {
-          this.log('go', 'Stop command sent');
+        if (session.currentSessionId) {
+          this.log('go', 'Stop command sent', session.userId);
           try {
-            await this.apiClient.stop(this.currentSessionId);
+            await this.apiClient.stop(session.currentSessionId);
           } catch (err) {
-            this.log('nodejs', `Stop error: ${err}`);
+            this.log('nodejs', `Stop error: ${err}`, session.userId);
           }
         }
-        this.resetPlaybackState();
-        this.broadcastJson({ type: 'stopped' });
+        this.resetPlaybackState(session);
+        this.broadcastJsonToUser(session.userId, { type: 'stopped' });
 
       } else if (message.action === 'pause') {
-        if (this.currentSessionId && !this.isPaused) {
-          if (this.playbackStartAt) {
-            this.playbackOffsetSec += (Date.now() - this.playbackStartAt) / 1000;
-            this.playbackStartAt = null;
+        if (session.currentSessionId && !session.isPaused) {
+          if (session.playbackStartAt) {
+            session.playbackOffsetSec += (Date.now() - session.playbackStartAt) / 1000;
+            session.playbackStartAt = null;
           }
-          // Set flag FIRST - stops audio processing immediately
-          this.isPaused = true;
+          session.isPaused = true;
 
-          // Stop audio player immediately (kills ffplay) - only in debug mode
           if (this.debugMode && !this.webMode) {
             this.audioPlayer.stop();
           }
 
-          // Broadcast immediately for responsive UI
-          this.broadcastJson({ type: 'paused' });
-          this.log('nodejs', 'Playback paused');
+          this.broadcastJsonToUser(session.userId, { type: 'paused' });
+          this.log('nodejs', 'Playback paused', session.userId);
 
-          // Tell Go to pause (non-blocking - audio already stopped locally)
-          this.apiClient.pause(this.currentSessionId).catch((err) => {
-            this.log('nodejs', `Pause API error: ${err}`);
+          this.apiClient.pause(session.currentSessionId).catch((err) => {
+            this.log('nodejs', `Pause API error: ${err}`, session.userId);
           });
         }
 
       } else if (message.action === 'resume') {
-        if (this.currentSessionId && this.isPaused) {
-          this.playbackStartAt = Date.now();
-          // Tell Go to resume FIRST (it needs to start sending chunks)
-          const sessionId = this.currentSessionId;
+        if (session.currentSessionId && session.isPaused) {
+          session.playbackStartAt = Date.now();
+          const sessionId = session.currentSessionId;
+
           this.apiClient.resume(sessionId).then(() => {
-            this.log('nodejs', 'Playback resumed');
+            this.log('nodejs', 'Playback resumed', session.userId);
           }).catch((err) => {
-            this.log('nodejs', `Resume API error: ${err}`);
+            this.log('nodejs', `Resume API error: ${err}`, session.userId);
           });
 
-          // Set flag and start audio player (only in debug mode, not web mode)
-          this.isPaused = false;
-          if (this.debugMode && !this.webMode && this.isStreamReady) {
+          session.isPaused = false;
+          if (this.debugMode && !this.webMode && session.isStreamReady) {
             this.audioPlayer.start();
           }
 
-          this.broadcastJson({ type: 'resumed' });
+          this.broadcastJsonToUser(session.userId, { type: 'resumed' });
         }
-      } else if (message.action === 'resumeFrom' && typeof message.seconds === 'number') {
-        const requestId = ++this.playRequestId;
-        this.activePlayRequestId = requestId;
-        const seconds = Math.max(0, message.seconds);
-        this.log('nodejs', `Resume from ${seconds.toFixed(2)}s requested`);
 
-        this.scheduleTransition(requestId, () => this.handleResumeFrom(seconds, requestId));
+      } else if (message.action === 'resumeFrom' && typeof message.seconds === 'number') {
+        const requestId = ++session.playRequestId;
+        session.activePlayRequestId = requestId;
+        const seconds = Math.max(0, message.seconds);
+        this.log('nodejs', `Resume from ${seconds.toFixed(2)}s requested`, session.userId);
+        this.scheduleTransition(session, requestId, () => this.handleResumeFrom(session, seconds, requestId));
       }
     } catch (err) {
-      this.log('nodejs', `Error handling message: ${err}`);
+      this.log('nodejs', `Error handling message: ${err}`, session.userId);
     }
   }
 
-  private broadcastJson(data: object): void {
+  private broadcastJsonToUser(userId: string, data: object): void {
     const json = JSON.stringify(data);
-    for (const client of this.clients) {
-      if (client.readyState === 1) {
-        client.send(json);
+    for (const [ws, uid] of this.clients) {
+      if (uid === userId && ws.readyState === 1) {
+        ws.send(json);
       }
     }
   }
 
-  private broadcastBinary(data: Buffer): void {
-    for (const client of this.clients) {
-      if (client.readyState === 1) {
-        client.send(data, { binary: true });
+  private broadcastBinaryToUser(userId: string, data: Buffer): void {
+    for (const [ws, uid] of this.clients) {
+      if (uid === userId && ws.readyState === 1) {
+        ws.send(data, { binary: true });
       }
     }
   }
 
-  // Extract YouTube video ID from various URL formats
   private extractVideoId(url: string): string | null {
     const patterns = [
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
@@ -649,12 +647,4 @@ export class WebSocketHandler {
   isConnected(): boolean {
     return this.socketClient.isConnected();
   }
-}
-
-function generateSessionId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
 }

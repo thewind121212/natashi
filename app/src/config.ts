@@ -11,4 +11,12 @@ export const config = {
 
   // Debug mode
   debugAudio: process.env.DEBUG_AUDIO === '1',
+
+  // Discord OAuth2
+  discordClientId: process.env.DISCORD_CLIENT_ID ?? '',
+  discordClientSecret: process.env.DISCORD_CLIENT_SECRET ?? '',
+  discordRedirectUri: process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3000/auth/callback',
+
+  // JWT
+  jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-in-production',
 } as const;
