@@ -63,6 +63,12 @@ flowchart TB
 
 > **Node.js is the brain**: It tells Go what to do. Go processes audio and streams it back.
 
+## Session Identity + Auth
+
+- Browser sessions are authenticated via Discord OAuth2 and a JWT stored in the `auth` cookie.
+- WebSocket connections require a valid JWT and map to a user session (`session_id = Discord user ID`).
+- Discord bot playback uses `guildId` as the `session_id`.
+
 ## Components
 
 | ID | Component | Responsibility | Code Location |
@@ -179,6 +185,63 @@ sequenceDiagram
     SC-->>WS: audio data
     WS-->>B: {type: "progress"}
 ```
+
+## Core Flows
+
+### Discord Bot (Opus)
+
+```mermaid
+sequenceDiagram
+    participant User as Discord User
+    participant Bot as c3-101
+    participant API as c3-104
+    participant Go as C3-2
+    participant Voice as c3-102
+
+    User->>Bot: /play url
+    Bot->>API: play(guildId, url, opus)
+    API->>Go: POST /session/:guildId/play
+    Go-->>Bot: Ogg Opus over socket
+    Bot->>Voice: playStream(ogg/opus)
+```
+
+### Debug PCM (macOS speakers)
+
+```mermaid
+sequenceDiagram
+    participant Browser as Playground UI
+    participant WS as c3-107
+    participant API as c3-104
+    participant Go as C3-2
+    participant Audio as AudioPlayer
+
+    Browser->>WS: play(url)
+    WS->>API: play(userId, url, pcm)
+    API->>Go: POST /session/:userId/play
+    Go-->>WS: PCM over socket
+    WS->>Audio: ffplay PCM
+```
+
+### Browser Web Audio (Ogg Opus)
+
+```mermaid
+sequenceDiagram
+    participant Browser as Playground UI
+    participant WS as c3-107
+    participant API as c3-104
+    participant Go as C3-2
+
+    Browser->>WS: play(url)
+    WS->>API: play(userId, url, web)
+    API->>Go: POST /session/:userId/play
+    Go-->>WS: Ogg Opus over socket
+    WS-->>Browser: binary WebSocket
+```
+
+## Constraints
+
+- Discord voice connections are tracked per guild; one active voice connection per guild at a time.
+- Current Go implementation stops all existing sessions on `StartPlayback`, so only one session can stream at a time across all sources.
 
 ## Technology Stack
 

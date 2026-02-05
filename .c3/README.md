@@ -22,6 +22,11 @@ Discord Music Bot with **Lavalink-quality audio streaming**. Hybrid architecture
 
 **Goal**: No lagging, smooth transmission, Opus encoding, 48kHz stereo.
 
+**Delivery targets**:
+- Discord voice channels (Opus)
+- macOS speakers (PCM debug)
+- Browser playback (Ogg Opus)
+
 ## Container Diagram (C3-1 & C3-2)
 
 ```mermaid
@@ -95,6 +100,7 @@ flowchart LR
     YT --> FF --> FORMAT
     FORMAT -->|pcm| PCM --> JIT
     FORMAT -->|opus| OPUS --> JIT
+    FORMAT -->|web| OPUS --> JIT
     JIT --> SOCK
 ```
 
@@ -102,6 +108,7 @@ flowchart LR
 |--------|----------|--------|
 | `pcm` | Playground debug | macOS speakers |
 | `opus` | Discord production | Voice channel UDP |
+| `web` | Browser playback | Ogg Opus over WebSocket |
 
 ## Control Flow
 
@@ -114,11 +121,63 @@ sequenceDiagram
     participant Socket as Unix Socket
 
     Client->>Node: play(url, format)
-    Node->>Gin: POST /session/:id/play
+    Node->>Gin: POST /session/:id/play (session_id)
     Gin->>Session: StartPlayback()
     Session-->>Socket: Audio (pcm/opus)
     Socket-->>Node: Stream
     Node-->>Client: Audio output
+
+## Core Flows
+
+### Discord Bot (Opus)
+
+```mermaid
+sequenceDiagram
+    participant User as Discord User
+    participant Bot as Node.js Discord Bot
+    participant Go as Go Audio Engine
+    participant Discord as Discord Voice
+
+    User->>Bot: /play url
+    Bot->>Go: POST /session/:guildId/play (format=opus)
+    Go-->>Bot: Opus over Unix Socket
+    Bot-->>Discord: Ogg Opus stream (Voice UDP)
+```
+
+### Debug Playback (PCM to macOS)
+
+```mermaid
+sequenceDiagram
+    participant Browser as Playground UI
+    participant Node as Node.js
+    participant Go as Go Audio Engine
+    participant Mac as macOS Speakers
+
+    Browser->>Node: play(url)
+    Node->>Go: POST /session/:userId/play (format=pcm)
+    Go-->>Node: PCM over Unix Socket
+    Node-->>Mac: ffplay PCM
+```
+
+### Browser Playback (Ogg Opus)
+
+```mermaid
+sequenceDiagram
+    participant Browser as Playground UI
+    participant Node as Node.js
+    participant Go as Go Audio Engine
+
+    Browser->>Node: WebSocket play(url)
+    Node->>Go: POST /session/:userId/play (format=web)
+    Go-->>Node: Ogg Opus over Unix Socket
+    Node-->>Browser: Binary WebSocket (Ogg Opus)
+```
+
+## Session Identity
+
+- Discord bot sessions use `guildId` as the `session_id`.
+- Browser sessions use Discord OAuth JWT `sub` (user ID) as the `session_id`.
+- Current Go implementation stops all existing sessions on every `StartPlayback`, so the system is effectively single-active-session across all sources.
 ```
 
 ## Components

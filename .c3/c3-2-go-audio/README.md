@@ -61,6 +61,13 @@ flowchart TB
 
 > **Go is the audio engine**: Node.js tells Go what to do. Go processes audio and streams it back.
 
+## Session Identity
+
+- `session_id` is provided by Node.js.
+- Discord bot uses `guildId` as `session_id`.
+- Browser uses Discord OAuth JWT `sub` (user ID) as `session_id`.
+- Current `StartPlayback` stops all existing sessions, so Go enforces a single active session system-wide.
+
 ## Components
 
 | ID | Component | Responsibility | Code Location |
@@ -147,7 +154,7 @@ flowchart LR
     subgraph c3_204["c3-204 Opus Encoder"]
         DECODE[FFmpeg Decode]
         RESAMPLE[Resample 48kHz]
-        ENCODE[Encode PCM/Opus]
+        ENCODE[Encode PCM/Opus/Ogg]
     end
 
     subgraph c3_205["c3-205 Jitter Buffer"]
@@ -250,6 +257,14 @@ cmd/playground/
 | Frame Size | 960 samples (20ms) | Discord requirement |
 | Bitrate | 128 kbps VBR | Good quality |
 | Jitter Buffer | 3-5 frames (60-100ms) | Smooth delivery |
+
+## Formats
+
+| Format | Use Case | Output |
+|--------|----------|--------|
+| `pcm` | Debug playback | Raw PCM s16le |
+| `opus` | Discord | Opus frames (Ogg) |
+| `web` | Browser playback | Ogg Opus |
 
 ## Environment Variables
 
