@@ -1,6 +1,11 @@
 import express, { Express, Request, Response } from 'express';
 import * as path from 'path';
+import * as crypto from 'crypto';
+import cookieParser from 'cookie-parser';
 import { ApiClient } from './api-client';
+import { discordOAuth } from './auth/discord-oauth';
+import { signToken, verifyToken } from './auth/jwt';
+import { config } from './config';
 
 const PORT = 3000;
 
@@ -8,8 +13,9 @@ export function createServer(): Express {
   const app = express();
   const apiClient = new ApiClient();
 
-  // Parse JSON body
+  // Parse JSON body and cookies
   app.use(express.json());
+  app.use(cookieParser());
 
   // Serve static files from public directory
   app.use(express.static(path.join(__dirname, '../public')));
@@ -17,6 +23,101 @@ export function createServer(): Express {
   // Health check endpoint
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  // === OAuth Routes ===
+
+  // Initiate Discord OAuth2 flow
+  app.get('/auth/discord', (_req, res) => {
+    const state = crypto.randomBytes(16).toString('hex');
+    res.cookie('oauth_state', state, { httpOnly: true, maxAge: 600000 }); // 10 min
+    res.redirect(discordOAuth.getAuthorizationUrl(state));
+  });
+
+  // OAuth2 callback
+  app.get('/auth/callback', async (req: Request, res: Response) => {
+    const { code, state } = req.query;
+    const savedState = req.cookies.oauth_state;
+
+    // Validate state to prevent CSRF
+    if (!state || state !== savedState) {
+      res.status(400).send('Invalid state parameter');
+      return;
+    }
+
+    if (!code || typeof code !== 'string') {
+      res.status(400).send('Missing authorization code');
+      return;
+    }
+
+    try {
+      const tokens = await discordOAuth.exchangeCode(code);
+      const user = await discordOAuth.getUser(tokens.access_token);
+
+      // Check if user is allowed (whitelist)
+      if (config.allowedDiscordIds.length > 0 && !config.allowedDiscordIds.includes(user.id)) {
+        console.log(`[Auth] Access denied for user ${user.username} (${user.id})`);
+        res.clearCookie('oauth_state');
+        res.clearCookie('auth'); // Clear any existing session
+        res.status(403).send('Access denied. Your Discord account is not authorized to use this application.');
+        return;
+      }
+
+      const jwt = signToken({
+        sub: user.id,
+        username: user.global_name || user.username,
+        avatar: discordOAuth.getAvatarUrl(user),
+      });
+
+      res.cookie('auth', jwt, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      });
+      res.clearCookie('oauth_state');
+      res.redirect('/');
+    } catch (err) {
+      console.error('[Auth] OAuth callback error:', err);
+      res.status(500).send('Authentication failed');
+    }
+  });
+
+  // Get current user
+  app.get('/auth/me', (req: Request, res: Response) => {
+    const token = req.cookies.auth;
+    if (!token) {
+      res.json({ user: null });
+      return;
+    }
+
+    const payload = verifyToken(token);
+    if (!payload) {
+      res.json({ user: null });
+      return;
+    }
+
+    // Check if user is still in whitelist (for existing sessions)
+    if (config.allowedDiscordIds.length > 0 && !config.allowedDiscordIds.includes(payload.sub)) {
+      console.log(`[Auth] Session invalidated - user ${payload.username} (${payload.sub}) not in whitelist`);
+      res.clearCookie('auth');
+      res.json({ user: null });
+      return;
+    }
+
+    res.json({
+      user: {
+        id: payload.sub,
+        username: payload.username,
+        avatar: payload.avatar,
+      },
+    });
+  });
+
+  // Logout
+  app.post('/auth/logout', (_req, res) => {
+    res.clearCookie('auth');
+    res.json({ success: true });
   });
 
   // === Session Control Endpoints (proxy to Go API) ===

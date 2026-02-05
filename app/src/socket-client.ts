@@ -95,16 +95,37 @@ export interface Event {
 
 // SocketClient handles Unix socket connection for receiving audio data.
 // Control commands are now handled via HTTP API (see api-client.ts).
+// Session-specific audio stream with its own jitter buffer
+interface SessionStream {
+  stream: PassThrough;
+  jitterBuffer: JitterBuffer;
+}
+
 export class SocketClient extends EventEmitter {
   private socket: net.Socket | null = null;
   private connected = false;
   private buffer = Buffer.alloc(0);
   private readingAudio = false;
   private audioLength = 0;
-  private audioStream: PassThrough | null = null;
-  private jitterBuffer: JitterBuffer | null = null;
+  // Per-session audio streams (keyed by sessionId)
+  private sessionStreams = new Map<string, SessionStream>();
+
+  // Singleton instance for shared access
+  private static instance: SocketClient | null = null;
+
+  static getSharedInstance(): SocketClient {
+    if (!SocketClient.instance) {
+      SocketClient.instance = new SocketClient();
+    }
+    return SocketClient.instance;
+  }
 
   connect(): Promise<void> {
+    // Idempotent: return immediately if already connected
+    if (this.connected && this.socket) {
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(SOCKET_PATH, () => {
         console.log('[SocketClient] Connected to Go server (audio)');
@@ -124,6 +145,8 @@ export class SocketClient extends EventEmitter {
       this.socket.on('close', () => {
         console.log('[SocketClient] Disconnected');
         this.connected = false;
+        // Clean up all session streams on disconnect
+        this.endAllAudioStreams();
         this.emit('close');
       });
 
@@ -139,12 +162,23 @@ export class SocketClient extends EventEmitter {
   private processBuffer(): void {
     while (this.buffer.length > 0) {
       if (this.readingAudio) {
-        // Reading binary audio data
+        // Reading binary audio data (24-byte session ID + audio)
         if (this.buffer.length >= this.audioLength) {
-          const audioData = this.buffer.subarray(0, this.audioLength);
+          const SESSION_ID_LEN = 24;
+          // Defensive check: packet must be at least 24 bytes for session ID
+          if (this.audioLength < SESSION_ID_LEN) {
+            console.error(`[SocketClient] Malformed packet: length ${this.audioLength} < ${SESSION_ID_LEN}`);
+            this.buffer = this.buffer.subarray(this.audioLength);
+            this.readingAudio = false;
+            continue; // Skip malformed packet
+          }
+          const sessionId = this.buffer.subarray(0, SESSION_ID_LEN).toString('utf8').trim();
+          const audioData = this.buffer.subarray(SESSION_ID_LEN, this.audioLength);
           this.buffer = this.buffer.subarray(this.audioLength);
           this.readingAudio = false;
-          this.emit('audio', audioData);
+          this.emit('audio', { sessionId, data: audioData });
+          // Route to session-specific stream if exists
+          this.routeAudioToSession(sessionId, audioData);
         } else {
           break; // Need more data
         }
@@ -218,43 +252,52 @@ export class SocketClient extends EventEmitter {
     return this.connected;
   }
 
-  // Create a PassThrough stream for Discord audio playback with jitter buffering
-  createAudioStream(): PassThrough {
-    // End previous stream and jitter buffer if exists
-    this.endAudioStream();
+  // Route audio data to session-specific stream
+  private routeAudioToSession(sessionId: string, data: Buffer): void {
+    const session = this.sessionStreams.get(sessionId);
+    if (session) {
+      session.jitterBuffer.push(data);
+    }
+  }
 
-    this.audioStream = new PassThrough();
-    this.jitterBuffer = new JitterBuffer(this.audioStream);
+  // Create a PassThrough stream for a specific session (Discord guild or user)
+  createAudioStreamForSession(sessionId: string): PassThrough {
+    // End previous stream for this session if exists
+    this.endAudioStreamForSession(sessionId);
 
-    // Route audio events through jitter buffer for smooth playback
-    const audioHandler = (data: Buffer) => {
-      if (this.jitterBuffer) {
-        this.jitterBuffer.push(data);
-      }
-    };
-    this.on('audio', audioHandler);
+    const stream = new PassThrough();
+    const jitterBuffer = new JitterBuffer(stream);
+
+    this.sessionStreams.set(sessionId, { stream, jitterBuffer });
 
     // Clean up when stream is destroyed
-    this.audioStream.on('close', () => {
-      this.off('audio', audioHandler);
-      if (this.jitterBuffer) {
-        this.jitterBuffer.stop();
-        this.jitterBuffer = null;
+    stream.on('close', () => {
+      const session = this.sessionStreams.get(sessionId);
+      if (session) {
+        session.jitterBuffer.stop();
+        this.sessionStreams.delete(sessionId);
       }
     });
 
-    return this.audioStream;
+    return stream;
   }
 
-  // End the current audio stream and jitter buffer
-  endAudioStream(): void {
-    if (this.jitterBuffer) {
-      this.jitterBuffer.stop();
-      this.jitterBuffer = null;
+  // End audio stream for a specific session
+  endAudioStreamForSession(sessionId: string): void {
+    const session = this.sessionStreams.get(sessionId);
+    if (session) {
+      session.jitterBuffer.stop();
+      session.stream.end();
+      this.sessionStreams.delete(sessionId);
     }
-    if (this.audioStream) {
-      this.audioStream.end();
-      this.audioStream = null;
+  }
+
+  // End all audio streams (cleanup)
+  endAllAudioStreams(): void {
+    for (const [sessionId, session] of this.sessionStreams) {
+      session.jitterBuffer.stop();
+      session.stream.end();
     }
+    this.sessionStreams.clear();
   }
 }

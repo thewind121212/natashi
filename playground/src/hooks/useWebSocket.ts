@@ -15,6 +15,12 @@ interface Track {
   addedAt: string;
 }
 
+interface User {
+  id: string;
+  username: string;
+  avatar: string | null;
+}
+
 interface WebSocketMessage {
   type: string;
   debugMode?: boolean;
@@ -29,6 +35,7 @@ interface WebSocketMessage {
   queue?: Track[];
   currentIndex?: number;
   nowPlaying?: Track | null;
+  user?: User;
 }
 
 interface UseWebSocketReturn {
@@ -45,6 +52,7 @@ interface UseWebSocketReturn {
   queue: Track[];
   currentIndex: number;
   nowPlaying: Track | null;
+  user: User | null;
   play: (url: string) => void;
   stop: () => void;
   pause: () => void;
@@ -60,13 +68,19 @@ interface UseWebSocketReturn {
 
 export type { Track };
 
+interface UseWebSocketOptions {
+  onUnauthorized?: () => void;
+}
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 };
 
-export function useWebSocket(): UseWebSocketReturn {
+export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
+  const onUnauthorizedRef = useRef(options.onUnauthorized);
+  onUnauthorizedRef.current = options.onUnauthorized;
   const wsRef = useRef<WebSocket | null>(null);
   const playStartTimeRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -91,6 +105,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const audioStartedRef = useRef(false);
 
   const getWebSocketUrl = useCallback(() => {
@@ -179,6 +194,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setWebMode(!!msg.webMode);
         setIsPaused(!!msg.isPaused);
         setIsPlaying(!!msg.isPlaying);
+        if (msg.user) setUser(msg.user);
         if (typeof msg.playback_secs === 'number') {
           setPlaybackTime(msg.playback_secs);
           lastTickRef.current = Date.now();
@@ -360,11 +376,19 @@ export function useWebSocket(): UseWebSocketReturn {
         addLogRef.current.fn('nodejs', 'WebSocket connected');
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (!mountedRef.current) return;
         setIsConnected(false);
         autoPauseRequestedRef.current = false;
         needsResumeFromRef.current = false;
+
+        // Handle unauthorized - trigger logout
+        if (event.code === 4401) {
+          updateStatusRef.current.fn('Session expired', 'error');
+          onUnauthorizedRef.current?.();
+          return;
+        }
+
         updateStatusRef.current.fn('Disconnected from server', 'error');
 
         if (reconnectTimeoutRef.current) {
@@ -579,6 +603,7 @@ export function useWebSocket(): UseWebSocketReturn {
     queue,
     currentIndex,
     nowPlaying,
+    user,
     play,
     stop,
     pause,

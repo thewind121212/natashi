@@ -101,12 +101,12 @@ func (m *SessionManager) GetConnection() net.Conn {
 func (m *SessionManager) StartPlayback(id string, url string, formatStr string, startAtSec float64) error {
 	m.mu.Lock()
 
-	// Stop ALL existing sessions - only one session should play at a time
-	// This prevents duplicate audio streams when user clicks play rapidly
-	for existingID, existing := range m.sessions {
-		fmt.Printf("[Session] Stopping existing session %s for new playback\n", existingID[:8])
+	// Stop only the session with the same ID (if exists)
+	// This allows concurrent sessions for different guilds/users
+	if existing, ok := m.sessions[id]; ok {
+		fmt.Printf("[Session] Stopping existing session %s for new playback\n", id[:8])
 		existing.Stop()
-		delete(m.sessions, existingID)
+		delete(m.sessions, id)
 	}
 
 	// Determine format
@@ -272,15 +272,24 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 				continue // No connection, skip chunk (will retry on next chunk)
 			}
 
-			// Coalesce header + chunk into single write to avoid TCP Nagle delays
-			// Header: 4 bytes big-endian length
-			length := uint32(len(chunk))
-			packet := make([]byte, 4+len(chunk))
+			// Coalesce header + session ID + chunk into single write to avoid TCP Nagle delays
+			// Header: 4 bytes big-endian length (includes session ID + audio data)
+			// Session ID: 24 bytes, right-padded with spaces (truncated if longer)
+			const sessionIDLen = 24
+			sessionID := session.ID
+			if len(sessionID) > sessionIDLen {
+				sessionID = sessionID[:sessionIDLen]
+			}
+			paddedID := fmt.Sprintf("%-24s", sessionID)
+
+			length := uint32(sessionIDLen + len(chunk))
+			packet := make([]byte, 4+sessionIDLen+len(chunk))
 			packet[0] = byte(length >> 24)
 			packet[1] = byte(length >> 16)
 			packet[2] = byte(length >> 8)
 			packet[3] = byte(length)
-			copy(packet[4:], chunk)
+			copy(packet[4:4+sessionIDLen], paddedID)
+			copy(packet[4+sessionIDLen:], chunk)
 
 			if _, err := conn.Write(packet); err != nil {
 				// Connection broken - clear it and wait for reconnect

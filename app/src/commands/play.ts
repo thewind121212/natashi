@@ -10,9 +10,10 @@ import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 
 const apiClient = new ApiClient();
-const socketClient = new SocketClient();
+// Use shared singleton - same connection as WebSocket handler
+const socketClient = SocketClient.getSharedInstance();
 
-let socketConnected = false;
+let eventHandlersAttached = false;
 
 export const data = new SlashCommandBuilder()
   .setName('play')
@@ -48,25 +49,31 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   await interaction.deferReply();
 
   try {
-    // Connect to socket if not connected
-    if (!socketConnected) {
+    // Connect to socket if not connected (idempotent)
+    if (!socketClient.isConnected()) {
       await socketClient.connect();
-      socketConnected = true;
+    }
+
+    // Attach event handlers once
+    if (!eventHandlersAttached) {
+      eventHandlersAttached = true;
 
       socketClient.on('event', (event) => {
         console.log(`[Play] Socket event:`, event);
         if (event.type === 'finished') {
+          socketClient.endAudioStreamForSession(event.session_id);
           voiceManager.stop(event.session_id);
         }
       });
 
       socketClient.on('close', () => {
-        socketConnected = false;
+        eventHandlersAttached = false;
       });
     }
 
     // Stop current playback if any
     if (voiceManager.isConnected(guildId)) {
+      socketClient.endAudioStreamForSession(guildId);
       voiceManager.stop(guildId);
       await apiClient.stop(guildId);
     }
@@ -75,8 +82,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const voiceChannel = member.voice.channel;
     voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
 
-    // Create audio stream and start playing
-    const audioStream = socketClient.createAudioStream();
+    // Create per-guild audio stream (demuxed by guildId)
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     voiceManager.playStream(guildId, audioStream);
 
     // Tell Go to start playback (format: opus for Discord)

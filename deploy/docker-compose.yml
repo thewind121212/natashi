@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  music-bot:
+    image: ghcr.io/thewind121212/music-bot:latest
+    container_name: music-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /tmp/music-bot:/tmp/music-bot
+    networks:
+      ovh-network:
+        ipv4_address: 116.16.1.139
+
+networks:
+  ovh-network:
+    external: true

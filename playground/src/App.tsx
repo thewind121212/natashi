@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { LoginButton } from './components/LoginButton';
+import { LoginPage } from './components/LoginPage';
 import './App.css';
 import {
   Play,
@@ -19,10 +22,11 @@ import {
   Trash2,
 } from 'lucide-react';
 
-function App() {
+function PlayerApp() {
   const [urlInput, setUrlInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
+  const { forceLogout } = useAuth();
 
   const {
     isConnected,
@@ -45,7 +49,7 @@ function App() {
     skip,
     previous,
     clearQueue,
-  } = useWebSocket();
+  } = useWebSocket({ onUnauthorized: forceLogout });
 
   // Handle error toast display
   const errorStatus = statusType === 'error' ? status : null;
@@ -187,17 +191,20 @@ function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-slate-700 md:order-3">
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
-            >
-              <Radio size={14} /> WEB
+          <div className="flex items-center gap-3 md:order-3">
+            <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-slate-700">
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
+              >
+                <Radio size={14} /> WEB
+              </div>
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${debugMode && !webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
+              >
+                <Speaker size={14} /> MACHINE
+              </div>
             </div>
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${debugMode && !webMode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}
-            >
-              <Speaker size={14} /> MACHINE
-            </div>
+            <LoginButton />
           </div>
         </div>
       </div>
@@ -416,6 +423,32 @@ function App() {
         }
       `}</style>
     </div>
+  );
+}
+
+function AppContent() {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  return <PlayerApp />;
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 

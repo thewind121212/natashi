@@ -27,17 +27,15 @@ yarn-error.log*
 *.swp
 *.swo
 
-# Go
+# Go binaries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 __debug_bin*
-
-/bin
-
-bin
+/main
+/bin/
 
 # Test coverage
 coverage/

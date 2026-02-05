@@ -65,7 +65,7 @@ sequenceDiagram
 
     U->>B: Enter URL, click Play
     B->>N: WS: {action:"play", url, format:"webm"}
-    N->>N: Generate session_id (UUID)
+    N->>N: Generate session_id (Discord user ID)
     N->>G: Socket: {"type":"play", session_id, url, format}
 
     G->>G: Create session
@@ -234,13 +234,13 @@ flowchart TB
 │                    Raw Opus Frame                       │
 ├──────────────┬──────────────┬─────────────────────────┤
 │  session_id  │   sequence   │       opus_data         │
-│  (16 bytes)  │  (4 bytes)   │     (variable)          │
-│    UUID      │  uint32 BE   │   20ms Opus frame       │
+│  (24 bytes)  │  (4 bytes)   │     (variable)          │
+│  snowflake   │  uint32 BE   │   20ms Opus frame       │
 ├──────────────┼──────────────┼─────────────────────────┤
-│ 550e8400-... │  0x00000001  │  [encoded audio data]   │
+│ 1234567890123456789        │  0x00000001  │  [encoded audio data]   │
 └──────────────┴──────────────┴─────────────────────────┘
 
-Total: 20 + variable (typically 100-300 bytes per frame)
+Total: 28 + variable (typically 100-300 bytes per frame)
 Frames per second: 50 (20ms each)
 ```
 

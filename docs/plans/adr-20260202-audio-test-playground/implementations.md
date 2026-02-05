@@ -179,7 +179,7 @@ flowchart TB
 // Play command
 {
   "type": "play",
-  "session_id": "uuid-v4",
+  "session_id": "discord-user-id",
   "url": "https://youtube.com/watch?v=...",
   "format": "webm" | "raw"
 }
@@ -187,7 +187,7 @@ flowchart TB
 // Stop command
 {
   "type": "stop",
-  "session_id": "uuid-v4"
+  "session_id": "discord-user-id"
 }
 ```
 
@@ -197,21 +197,21 @@ flowchart TB
 // Ready event (extraction complete, streaming starts)
 {
   "type": "ready",
-  "session_id": "uuid-v4",
+  "session_id": "discord-user-id",
   "duration": 240  // seconds, 0 if unknown
 }
 
 // Error event
 {
   "type": "error",
-  "session_id": "uuid-v4",
+  "session_id": "discord-user-id",
   "message": "extraction failed: ..."
 }
 
 // Finished event (playback complete)
 {
   "type": "finished",
-  "session_id": "uuid-v4"
+  "session_id": "discord-user-id"
 }
 ```
 
@@ -225,8 +225,8 @@ flowchart TB
 ```
 ┌──────────────┬──────────────┬─────────────────┐
 │ session_id   │ sequence     │ opus_data       │
-│ (16 bytes)   │ (4 bytes)    │ (variable)      │
-│ UUID         │ uint32 BE    │ Opus frame      │
+│ (24 bytes)   │ (4 bytes)    │ (variable)      │
+│ snowflake    │ uint32 BE    │ Opus frame      │
 └──────────────┴──────────────┴─────────────────┘
 ```
 

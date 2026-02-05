@@ -10,6 +10,15 @@ Discord music bot with **Lavalink-quality audio streaming**. Hybrid Node.js + Go
 - Opus encoding (Discord native)
 - 48kHz stereo, 20ms frames
 
+## Agent Rules (Read Before Any Code Changes)
+
+- Always read `.c3/README.md` and relevant `.c3/*/README.md` docs before implementing changes.
+- Keep the three flows working and isolated:
+  - Discord bot stream (Opus) → Discord voice
+  - Debug stream (PCM) → macOS speakers
+  - Browser stream (Ogg Opus) → Web Audio
+- When implementing, scope changes to the specific flow. Do not break or couple the other flows.
+
 ## Architecture (C3 Model)
 
 > C3 = Context-Container-Component (first 3 levels of C4)
@@ -62,6 +71,7 @@ flowchart LR
         SAMPLE --> FORMAT{Format?}
         FORMAT -->|pcm| PCM[PCM s16le]
         FORMAT -->|opus| OPUS[Opus Encode]
+        FORMAT -->|web| OPUS
         PCM --> JITTER[Jitter Buffer]
         OPUS --> JITTER
         JITTER --> SOCKET[Unix Socket]
@@ -69,7 +79,8 @@ flowchart LR
 
     subgraph Node["Node.js"]
         SOCKET --> ROUTE{Route?}
-        ROUTE -->|Playground| SPEAKER[macOS Speakers]
+        ROUTE -->|Playground PCM| SPEAKER[macOS Speakers]
+        ROUTE -->|Browser Web| BROWSER[Web Audio]
         ROUTE -->|Discord| VOICE[Discord Voice UDP]
     end
 ```
@@ -87,7 +98,7 @@ sequenceDiagram
     Client->>Node: play(url, format)
     Node->>Gin: POST /session/:id/play {url, format}
     Gin->>Session: StartPlayback(id, url, format)
-    Session-->>Socket: Audio chunks (pcm/opus)
+    Session-->>Socket: Audio chunks (pcm/opus/web)
     Socket-->>Node: Stream audio
     Node-->>Client: Audio (speaker/Discord)
 ```
@@ -121,7 +132,7 @@ sequenceDiagram
 
 | Endpoint | Method | Body | Description |
 |----------|--------|------|-------------|
-| `/session/:id/play` | POST | `{url, format}` | Start playback (format: pcm/opus) |
+| `/session/:id/play` | POST | `{url, format}` | Start playback (format: pcm/opus/web) |
 | `/session/:id/stop` | POST | - | Stop & kill FFmpeg |
 | `/session/:id/pause` | POST | - | Pause (FFmpeg keeps running) |
 | `/session/:id/resume` | POST | - | Resume streaming |
@@ -134,6 +145,7 @@ sequenceDiagram
 |--------|----------|--------|
 | `pcm` | Playground debug | Raw PCM s16le → macOS speakers |
 | `opus` | Discord production | Opus frames → Discord voice UDP |
+| `web` | Browser playback | Ogg Opus → Web Audio |
 
 ## Playground Features
 

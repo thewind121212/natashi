@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Music Bot system provides high-quality audio streaming to Discord voice channels and web browsers, with Lavalink-equivalent audio quality.
+The Music Bot system provides high-quality audio streaming to Discord voice channels, macOS speakers (debug), and web browsers, with Lavalink-equivalent audio quality.
 
 ## Context Diagram
 
@@ -41,7 +41,7 @@ flowchart TB
 - Interacts via React UI
 - HTTP API for control commands
 - WebSocket for real-time events
-- Audio playback to local speakers (debug mode)
+- Audio playback via Web Audio API (Ogg Opus) or local speakers (debug PCM)
 
 ### Bot Admin
 - Deploys and configures the bot
@@ -134,6 +134,12 @@ flowchart TB
 | Frame Size | 20ms | Discord Opus frame requirement |
 | Jitter | <5ms | Smooth playback |
 | Concurrent Sessions | 60 | Medium-scale deployment |
+
+## Authentication + Sessions
+
+- Discord OAuth2 runs in Node.js and issues a signed JWT in the `auth` cookie.
+- WebSocket connections require a valid JWT and map to a user session (`session_id = Discord user ID`).
+- Discord bot playback uses `guildId` as the `session_id`.
 
 ## Deployment Contexts
 

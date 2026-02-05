@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.5
-ARG RUNTIME_BASE_IMAGE=node:20-bookworm-slim
+ARG RUNTIME_BASE_IMAGE=linhdevtran99/natashi-base:latest
 
 FROM golang:1.22-bookworm AS go-build
 ENV GOTOOLCHAIN=auto

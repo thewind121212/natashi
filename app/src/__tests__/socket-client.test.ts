@@ -25,12 +25,21 @@ class TestableSocketClient extends EventEmitter {
   private processBuffer(): void {
     while (this.buffer.length > 0) {
       if (this.readingAudio) {
-        // Reading binary audio data
+        // Reading binary audio data (24-byte session ID + audio)
         if (this.buffer.length >= this.audioLength) {
-          const audioData = this.buffer.subarray(0, this.audioLength);
+          const SESSION_ID_LEN = 24;
+          // Defensive check: packet must be at least 24 bytes for session ID
+          if (this.audioLength < SESSION_ID_LEN) {
+            this.buffer = this.buffer.subarray(this.audioLength);
+            this.readingAudio = false;
+            this.emit('malformed', { length: this.audioLength });
+            continue; // Skip malformed packet
+          }
+          const sessionId = this.buffer.subarray(0, SESSION_ID_LEN).toString('utf8').trim();
+          const audioData = this.buffer.subarray(SESSION_ID_LEN, this.audioLength);
           this.buffer = this.buffer.subarray(this.audioLength);
           this.readingAudio = false;
-          this.emit('audio', audioData);
+          this.emit('audio', { sessionId, data: audioData });
         } else {
           break; // Need more data
         }
@@ -95,76 +104,108 @@ describe('SocketClient Buffer Processing', () => {
   });
 
   describe('Audio Packet Parsing', () => {
-    it('should parse complete audio packet', () => {
-      // Build packet: 4-byte header (length=5) + 5 bytes data
-      const packet = Buffer.from([0x00, 0x00, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
+    // Helper to build packet with 24-byte session ID
+    const SESSION_ID_LEN = 24;
+    const buildPacket = (sessionId: string, audioBytes: number[]): Buffer => {
+      const paddedId = sessionId.padEnd(SESSION_ID_LEN, ' ');
+      const length = SESSION_ID_LEN + audioBytes.length;
+      const header = Buffer.from([
+        (length >> 24) & 0xff,
+        (length >> 16) & 0xff,
+        (length >> 8) & 0xff,
+        length & 0xff,
+      ]);
+      return Buffer.concat([header, Buffer.from(paddedId), Buffer.from(audioBytes)]);
+    };
+
+    it('should parse complete audio packet with session ID', () => {
+      const packet = buildPacket('test123', [0x01, 0x02, 0x03, 0x04, 0x05]);
       client.feedData(packet);
 
       expect(audioHandler).toHaveBeenCalledTimes(1);
-      expect(audioHandler).toHaveBeenCalledWith(Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05]));
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'test123',
+        data: Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05]),
+      });
     });
 
     it('should handle partial header (BUG: incomplete data arrives)', () => {
+      const packet = buildPacket('sess1', [0xaa, 0xbb, 0xcc]);
       // Only 2 bytes of header arrive
-      client.feedData(Buffer.from([0x00, 0x00]));
+      client.feedData(packet.subarray(0, 2));
       expect(audioHandler).not.toHaveBeenCalled();
       expect(client.getBufferLength()).toBe(2);
 
-      // Rest of header + data arrives
-      client.feedData(Buffer.from([0x00, 0x03, 0xaa, 0xbb, 0xcc]));
+      // Rest arrives
+      client.feedData(packet.subarray(2));
       expect(audioHandler).toHaveBeenCalledTimes(1);
-      expect(audioHandler).toHaveBeenCalledWith(Buffer.from([0xaa, 0xbb, 0xcc]));
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'sess1',
+        data: Buffer.from([0xaa, 0xbb, 0xcc]),
+      });
     });
 
     it('should handle partial audio data (BUG: large chunk split)', () => {
-      // Header says 10 bytes, but only 5 arrive
-      client.feedData(Buffer.from([0x00, 0x00, 0x00, 0x0a, 0x01, 0x02, 0x03, 0x04, 0x05]));
+      const packet = buildPacket('split', [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a]);
+      // Header + partial data
+      client.feedData(packet.subarray(0, 15));
       expect(audioHandler).not.toHaveBeenCalled();
 
       // Rest of data arrives
-      client.feedData(Buffer.from([0x06, 0x07, 0x08, 0x09, 0x0a]));
+      client.feedData(packet.subarray(15));
       expect(audioHandler).toHaveBeenCalledTimes(1);
-      expect(audioHandler).toHaveBeenCalledWith(
-        Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a])
-      );
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'split',
+        data: Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a]),
+      });
     });
 
     it('should handle multiple packets in single buffer', () => {
-      // Two packets concatenated
-      const packet1 = Buffer.from([0x00, 0x00, 0x00, 0x02, 0xaa, 0xbb]);
-      const packet2 = Buffer.from([0x00, 0x00, 0x00, 0x03, 0xcc, 0xdd, 0xee]);
+      const packet1 = buildPacket('guild1', [0xaa, 0xbb]);
+      const packet2 = buildPacket('guild2', [0xcc, 0xdd, 0xee]);
       client.feedData(Buffer.concat([packet1, packet2]));
 
       expect(audioHandler).toHaveBeenCalledTimes(2);
-      expect(audioHandler).toHaveBeenNthCalledWith(1, Buffer.from([0xaa, 0xbb]));
-      expect(audioHandler).toHaveBeenNthCalledWith(2, Buffer.from([0xcc, 0xdd, 0xee]));
+      expect(audioHandler).toHaveBeenNthCalledWith(1, {
+        sessionId: 'guild1',
+        data: Buffer.from([0xaa, 0xbb]),
+      });
+      expect(audioHandler).toHaveBeenNthCalledWith(2, {
+        sessionId: 'guild2',
+        data: Buffer.from([0xcc, 0xdd, 0xee]),
+      });
     });
 
     it('should handle zero-length audio packet (edge case)', () => {
-      // Edge case: header says 0 bytes
-      // Note: Current implementation doesn't emit for zero-length because
-      // the while(buffer.length > 0) exits before processing the zero-length chunk.
-      // This is acceptable since Go server never sends zero-length packets.
-      client.feedData(Buffer.from([0x00, 0x00, 0x00, 0x00]));
+      // Header with length = 24 (just session ID, no audio)
+      const header = Buffer.from([0x00, 0x00, 0x00, 0x18]); // 24 = 0x18
+      const sessionId = Buffer.from('empty'.padEnd(24, ' '));
+      client.feedData(Buffer.concat([header, sessionId]));
 
-      // After header, buffer is empty, readingAudio=true but while loop exits
-      // Next data arrival will complete the "zero-length" read
-      client.feedData(Buffer.from([0x00, 0x00, 0x00, 0x02, 0xaa, 0xbb])); // Next real packet
-
-      // Now we get the zero-length audio PLUS the next packet
-      expect(audioHandler).toHaveBeenCalledTimes(2);
-      expect(audioHandler).toHaveBeenNthCalledWith(1, Buffer.from([]));
-      expect(audioHandler).toHaveBeenNthCalledWith(2, Buffer.from([0xaa, 0xbb]));
+      expect(audioHandler).toHaveBeenCalledTimes(1);
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'empty',
+        data: Buffer.from([]),
+      });
     });
 
     it('should parse real PCM frame size (3840 bytes)', () => {
-      // 3840 = 0x00000F00
-      const header = Buffer.from([0x00, 0x00, 0x0f, 0x00]);
-      const audioData = Buffer.alloc(3840, 0x42); // Fill with 'B'
-      client.feedData(Buffer.concat([header, audioData]));
+      // 3840 + 24 = 3864 = 0x00000F18
+      const length = SESSION_ID_LEN + 3840;
+      const header = Buffer.from([
+        (length >> 24) & 0xff,
+        (length >> 16) & 0xff,
+        (length >> 8) & 0xff,
+        length & 0xff,
+      ]);
+      const sessionId = Buffer.from('pcmtest'.padEnd(24, ' '));
+      const audioData = Buffer.alloc(3840, 0x42);
+      client.feedData(Buffer.concat([header, sessionId, audioData]));
 
       expect(audioHandler).toHaveBeenCalledTimes(1);
-      expect(audioHandler.mock.calls[0][0].length).toBe(3840);
+      const call = audioHandler.mock.calls[0][0];
+      expect(call.sessionId).toBe('pcmtest');
+      expect(call.data.length).toBe(3840);
     });
   });
 
@@ -225,9 +266,23 @@ describe('SocketClient Buffer Processing', () => {
   });
 
   describe('Mixed Audio and Events', () => {
+    // Helper to build packet with 24-byte session ID
+    const SESSION_ID_LEN = 24;
+    const buildPacket = (sessionId: string, audioBytes: number[]): Buffer => {
+      const paddedId = sessionId.padEnd(SESSION_ID_LEN, ' ');
+      const length = SESSION_ID_LEN + audioBytes.length;
+      const header = Buffer.from([
+        (length >> 24) & 0xff,
+        (length >> 16) & 0xff,
+        (length >> 8) & 0xff,
+        length & 0xff,
+      ]);
+      return Buffer.concat([header, Buffer.from(paddedId), Buffer.from(audioBytes)]);
+    };
+
     it('should handle event followed by audio', () => {
       const event = Buffer.from('{"type":"ready","session_id":"test"}\n');
-      const audio = Buffer.from([0x00, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03]);
+      const audio = buildPacket('test', [0x01, 0x02, 0x03]);
       client.feedData(Buffer.concat([event, audio]));
 
       expect(eventHandler).toHaveBeenCalledTimes(1);
@@ -235,7 +290,7 @@ describe('SocketClient Buffer Processing', () => {
     });
 
     it('should handle audio followed by event', () => {
-      const audio = Buffer.from([0x00, 0x00, 0x00, 0x02, 0xaa, 0xbb]);
+      const audio = buildPacket('test', [0xaa, 0xbb]);
       const event = Buffer.from('{"type":"finished","session_id":"test"}');
       client.feedData(Buffer.concat([audio, event]));
 
@@ -244,9 +299,9 @@ describe('SocketClient Buffer Processing', () => {
     });
 
     it('should handle interleaved audio and events', () => {
-      const audio1 = Buffer.from([0x00, 0x00, 0x00, 0x01, 0x11]);
+      const audio1 = buildPacket('x', [0x11]);
       const event = Buffer.from('{"type":"ready","session_id":"x"}\n');
-      const audio2 = Buffer.from([0x00, 0x00, 0x00, 0x01, 0x22]);
+      const audio2 = buildPacket('x', [0x22]);
 
       client.feedData(Buffer.concat([audio1, event, audio2]));
 
@@ -276,20 +331,71 @@ describe('SocketClient Buffer Processing', () => {
       expect(eventHandler).not.toHaveBeenCalled();
     });
 
-    it('should handle very large audio packets', () => {
-      // 1MB packet
-      const size = 1024 * 1024;
-      const header = Buffer.from([
-        (size >> 24) & 0xff,
-        (size >> 16) & 0xff,
-        (size >> 8) & 0xff,
-        size & 0xff,
-      ]);
-      const data = Buffer.alloc(size, 0x55);
+    it('should skip malformed packet with length < 24 bytes', () => {
+      const malformedHandler = vi.fn();
+      client.on('malformed', malformedHandler);
+
+      // Header with length = 10 (less than 24-byte session ID requirement)
+      const header = Buffer.from([0x00, 0x00, 0x00, 0x0a]); // 10 bytes
+      const data = Buffer.alloc(10, 0x42);
       client.feedData(Buffer.concat([header, data]));
 
+      // Should emit malformed event, not audio
+      expect(audioHandler).not.toHaveBeenCalled();
+      expect(malformedHandler).toHaveBeenCalledTimes(1);
+      expect(malformedHandler).toHaveBeenCalledWith({ length: 10 });
+      expect(client.getBufferLength()).toBe(0); // Buffer consumed
+    });
+
+    it('should continue processing after malformed packet', () => {
+      const malformedHandler = vi.fn();
+      client.on('malformed', malformedHandler);
+
+      // Malformed packet (length = 5)
+      const malformedHeader = Buffer.from([0x00, 0x00, 0x00, 0x05]);
+      const malformedData = Buffer.alloc(5, 0x00);
+
+      // Valid packet after
+      const SESSION_ID_LEN = 24;
+      const validLength = SESSION_ID_LEN + 3;
+      const validHeader = Buffer.from([
+        (validLength >> 24) & 0xff,
+        (validLength >> 16) & 0xff,
+        (validLength >> 8) & 0xff,
+        validLength & 0xff,
+      ]);
+      const sessionId = Buffer.from('valid'.padEnd(SESSION_ID_LEN, ' '));
+      const audioData = Buffer.from([0xaa, 0xbb, 0xcc]);
+
+      client.feedData(Buffer.concat([malformedHeader, malformedData, validHeader, sessionId, audioData]));
+
+      expect(malformedHandler).toHaveBeenCalledTimes(1);
       expect(audioHandler).toHaveBeenCalledTimes(1);
-      expect(audioHandler.mock.calls[0][0].length).toBe(size);
+      expect(audioHandler).toHaveBeenCalledWith({
+        sessionId: 'valid',
+        data: Buffer.from([0xaa, 0xbb, 0xcc]),
+      });
+    });
+
+    it('should handle very large audio packets', () => {
+      // 1MB audio data + 24-byte session ID
+      const SESSION_ID_LEN = 24;
+      const audioSize = 1024 * 1024;
+      const totalLength = SESSION_ID_LEN + audioSize;
+      const header = Buffer.from([
+        (totalLength >> 24) & 0xff,
+        (totalLength >> 16) & 0xff,
+        (totalLength >> 8) & 0xff,
+        totalLength & 0xff,
+      ]);
+      const sessionId = Buffer.from('largetest'.padEnd(SESSION_ID_LEN, ' '));
+      const audioData = Buffer.alloc(audioSize, 0x55);
+      client.feedData(Buffer.concat([header, sessionId, audioData]));
+
+      expect(audioHandler).toHaveBeenCalledTimes(1);
+      const call = audioHandler.mock.calls[0][0];
+      expect(call.sessionId).toBe('largetest');
+      expect(call.data.length).toBe(audioSize);
     });
   });
 });
