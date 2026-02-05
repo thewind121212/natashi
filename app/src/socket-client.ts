@@ -121,6 +121,11 @@ export class SocketClient extends EventEmitter {
   }
 
   connect(): Promise<void> {
+    // Idempotent: return immediately if already connected
+    if (this.connected && this.socket) {
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(SOCKET_PATH, () => {
         console.log('[SocketClient] Connected to Go server (audio)');
@@ -140,6 +145,8 @@ export class SocketClient extends EventEmitter {
       this.socket.on('close', () => {
         console.log('[SocketClient] Disconnected');
         this.connected = false;
+        // Clean up all session streams on disconnect
+        this.endAllAudioStreams();
         this.emit('close');
       });
 

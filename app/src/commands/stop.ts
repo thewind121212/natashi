@@ -6,8 +6,10 @@ import {
 } from 'discord.js';
 import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
+import { SocketClient } from '../socket-client';
 
 const apiClient = new ApiClient();
+const socketClient = SocketClient.getSharedInstance();
 
 export const data = new SlashCommandBuilder()
   .setName('stop')
@@ -33,6 +35,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   try {
+    // Clean up audio stream for this guild
+    socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
     voiceManager.leave(guildId);
 
