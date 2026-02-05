@@ -1,4 +1,5 @@
 import express, { Express, Request, Response } from 'express';
+import cors from 'cors';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import cookieParser from 'cookie-parser';
@@ -12,6 +13,12 @@ const PORT = 3000;
 export function createServer(): Express {
   const app = express();
   const apiClient = new ApiClient();
+
+  // CORS
+  app.use(cors({
+    origin: process.env.APP_BASE_URL,
+    credentials: true,
+  }));
 
   // Parse JSON body and cookies
   app.use(express.json());
