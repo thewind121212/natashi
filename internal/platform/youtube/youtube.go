@@ -18,7 +18,10 @@ type Config struct {
 
 var config Config
 
-const defaultCookiesPath = "/app/secrets/youtube_cookies.txt"
+const (
+	defaultCookiesPath = "/app/secrets/youtube_cookies.txt"
+	runtimeCookiesPath = "/tmp/yt-cookies.txt"
+)
 
 // SetConfig sets the YouTube extractor configuration.
 func SetConfig(c Config) {
@@ -35,19 +38,33 @@ func LoadConfigFromEnv() {
 func getCookieArgs() []string {
 	cookiesFile := strings.TrimSpace(config.CookiesFile)
 	if cookiesFile != "" {
-		return []string{"--cookies", cookiesFile}
+		fmt.Printf("[YouTube] Using cookies file: %s\n", cookiesFile)
+		return []string{"--cookies", prepareCookieFile(cookiesFile)}
 	}
 
 	cookiesFromBrowser := strings.TrimSpace(config.CookiesFromBrowser)
 	if cookiesFromBrowser != "" {
+		fmt.Printf("[YouTube] Using cookies from browser: %s\n", cookiesFromBrowser)
 		return []string{"--cookies-from-browser", cookiesFromBrowser}
 	}
 
 	if _, err := os.Stat(defaultCookiesPath); err == nil {
-		return []string{"--cookies", defaultCookiesPath}
+		fmt.Printf("[YouTube] Using default cookies file: %s\n", defaultCookiesPath)
+		return []string{"--cookies", prepareCookieFile(defaultCookiesPath)}
 	}
 
 	return nil
+}
+
+func prepareCookieFile(sourcePath string) string {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return sourcePath
+	}
+	if err := os.WriteFile(runtimeCookiesPath, data, 0600); err != nil {
+		return sourcePath
+	}
+	return runtimeCookiesPath
 }
 
 // Extractor implements platform.StreamExtractor for YouTube.

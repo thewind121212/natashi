@@ -97,6 +97,13 @@ func (m *SessionManager) GetConnection() net.Conn {
 	return m.conn
 }
 
+func shortSessionID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
 // StartPlayback starts a new playback session (non-blocking).
 func (m *SessionManager) StartPlayback(id string, url string, formatStr string, startAtSec float64) error {
 	m.mu.Lock()
@@ -104,7 +111,7 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string, 
 	// Stop only the session with the same ID (if exists)
 	// This allows concurrent sessions for different guilds/users
 	if existing, ok := m.sessions[id]; ok {
-		fmt.Printf("[Session] Stopping existing session %s for new playback\n", id[:8])
+		fmt.Printf("[Session] Stopping existing session %s for new playback\n", shortSessionID(id))
 		existing.Stop()
 		delete(m.sessions, id)
 	}
@@ -144,7 +151,7 @@ func (m *SessionManager) runPlayback(session *Session) {
 	session.mu.Unlock()
 
 	session.SetState(StateExtracting)
-	fmt.Printf("[Session] Starting playback for %s\n", session.ID[:8])
+	fmt.Printf("[Session] Starting playback for %s\n", shortSessionID(session.ID))
 
 	// Find extractor for URL
 	extractor := m.registry.FindExtractor(session.URL)
@@ -157,7 +164,7 @@ func (m *SessionManager) runPlayback(session *Session) {
 	// Check if cancelled before extraction
 	select {
 	case <-sessionCtx.Done():
-		fmt.Printf("[Session] Cancelled before extraction %s\n", session.ID[:8])
+		fmt.Printf("[Session] Cancelled before extraction %s\n", shortSessionID(session.ID))
 		return
 	default:
 	}
@@ -174,7 +181,7 @@ func (m *SessionManager) runPlayback(session *Session) {
 	// Check if cancelled after extraction (user clicked play again during yt-dlp)
 	select {
 	case <-sessionCtx.Done():
-		fmt.Printf("[Session] Cancelled after extraction %s\n", session.ID[:8])
+		fmt.Printf("[Session] Cancelled after extraction %s\n", shortSessionID(session.ID))
 		return
 	default:
 	}
@@ -207,7 +214,7 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 	defer func() {
 		session.SetState(StateStopped)
 		m.sendEvent(session.ID, "finished", "")
-		fmt.Printf("[Session] Streaming finished for %s, sent %d bytes\n", session.ID[:8], session.BytesSent)
+		fmt.Printf("[Session] Streaming finished for %s, sent %d bytes\n", shortSessionID(session.ID), session.BytesSent)
 	}()
 
 	output := session.Pipeline.Output()
@@ -237,7 +244,7 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 
 			if paused {
 				session.SetState(StatePaused)
-				fmt.Printf("[Session] Paused %s (dropping chunk)\n", session.ID[:8])
+				fmt.Printf("[Session] Paused %s (dropping chunk)\n", shortSessionID(session.ID))
 
 				// Drain any stale resume signals before waiting
 				select {
@@ -258,7 +265,7 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 						session.mu.Unlock()
 						if !stillPaused {
 							session.SetState(StateStreaming)
-							fmt.Printf("[Session] Resumed %s\n", session.ID[:8])
+							fmt.Printf("[Session] Resumed %s\n", shortSessionID(session.ID))
 							break waitLoop
 						}
 						// Still paused, keep waiting
