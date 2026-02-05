@@ -15,6 +15,12 @@ interface Track {
   addedAt: string;
 }
 
+interface User {
+  id: string;
+  username: string;
+  avatar: string | null;
+}
+
 interface WebSocketMessage {
   type: string;
   debugMode?: boolean;
@@ -29,6 +35,7 @@ interface WebSocketMessage {
   queue?: Track[];
   currentIndex?: number;
   nowPlaying?: Track | null;
+  user?: User;
 }
 
 interface UseWebSocketReturn {
@@ -45,6 +52,7 @@ interface UseWebSocketReturn {
   queue: Track[];
   currentIndex: number;
   nowPlaying: Track | null;
+  user: User | null;
   play: (url: string) => void;
   stop: () => void;
   pause: () => void;
@@ -91,6 +99,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const audioStartedRef = useRef(false);
 
   const getWebSocketUrl = useCallback(() => {
@@ -179,6 +188,7 @@ export function useWebSocket(): UseWebSocketReturn {
         setWebMode(!!msg.webMode);
         setIsPaused(!!msg.isPaused);
         setIsPlaying(!!msg.isPlaying);
+        if (msg.user) setUser(msg.user);
         if (typeof msg.playback_secs === 'number') {
           setPlaybackTime(msg.playback_secs);
           lastTickRef.current = Date.now();
@@ -360,11 +370,19 @@ export function useWebSocket(): UseWebSocketReturn {
         addLogRef.current.fn('nodejs', 'WebSocket connected');
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (!mountedRef.current) return;
         setIsConnected(false);
         autoPauseRequestedRef.current = false;
         needsResumeFromRef.current = false;
+
+        // Handle unauthorized - redirect to login
+        if (event.code === 4401) {
+          updateStatusRef.current.fn('Session expired - redirecting to login', 'error');
+          window.location.reload(); // Auth check will redirect to login
+          return;
+        }
+
         updateStatusRef.current.fn('Disconnected from server', 'error');
 
         if (reconnectTimeoutRef.current) {
@@ -579,6 +597,7 @@ export function useWebSocket(): UseWebSocketReturn {
     queue,
     currentIndex,
     nowPlaying,
+    user,
     play,
     stop,
     pause,
