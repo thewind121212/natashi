@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -158,6 +159,7 @@ func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
 		"--skip-download",
 	}
 
+	args = append(args, getJsRuntimeArgs()...)
 	args = append(args, getCookieArgs()...)
 	args = append(args, youtubeURL)
 
@@ -171,6 +173,12 @@ func (e *Extractor) ExtractMetadata(youtubeURL string) (*Metadata, error) {
 	var meta Metadata
 	if err := json.Unmarshal(out, &meta); err != nil {
 		return nil, fmt.Errorf("failed to parse metadata: %w", err)
+	}
+
+	if meta.Thumbnail == "" {
+		if videoID := extractYouTubeID(youtubeURL); videoID != "" {
+			meta.Thumbnail = "https://i.ytimg.com/vi/" + videoID + "/mqdefault.jpg"
+		}
 	}
 
 	return &meta, nil
@@ -203,6 +211,7 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 		"-j", // JSON output per entry
 	}
 
+	args = append(args, getJsRuntimeArgs()...)
 	args = append(args, getCookieArgs()...)
 	args = append(args, playlistURL)
 
@@ -307,4 +316,21 @@ func normalizeYouTubeURL(input string) string {
 		return "https://www.youtube.com/watch?v=" + trimmed
 	}
 	return trimmed
+}
+
+func extractYouTubeID(value string) string {
+	if isYouTubeID(value) {
+		return value
+	}
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})`),
+		regexp.MustCompile(`youtube\.com/.*[?&]v=([a-zA-Z0-9_-]{11})`),
+	}
+	for _, pattern := range patterns {
+		match := pattern.FindStringSubmatch(value)
+		if len(match) > 1 {
+			return match[1]
+		}
+	}
+	return ""
 }
