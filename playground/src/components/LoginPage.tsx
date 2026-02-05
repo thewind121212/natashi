@@ -1,5 +1,4 @@
 import { useAuth } from '../contexts/AuthContext';
-import { Music } from 'lucide-react';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -9,8 +8,8 @@ export function LoginPage() {
       <div className="max-w-md w-full">
         <div className="bg-slate-800/80 backdrop-blur-xl rounded-3xl p-8 shadow-2xl border border-slate-700/50 text-center">
           <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 rounded-2xl bg-indigo-600/20 flex items-center justify-center">
-              <Music size={40} className="text-indigo-400" />
+            <div className="w-20 h-20 rounded-2xl overflow-hidden">
+              <img src="/logo.webp" alt="Natashi" className="w-full h-full object-cover" />
             </div>
           </div>
 
