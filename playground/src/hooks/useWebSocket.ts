@@ -68,13 +68,19 @@ interface UseWebSocketReturn {
 
 export type { Track };
 
+interface UseWebSocketOptions {
+  onUnauthorized?: () => void;
+}
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 };
 
-export function useWebSocket(): UseWebSocketReturn {
+export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
+  const onUnauthorizedRef = useRef(options.onUnauthorized);
+  onUnauthorizedRef.current = options.onUnauthorized;
   const wsRef = useRef<WebSocket | null>(null);
   const playStartTimeRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -376,10 +382,10 @@ export function useWebSocket(): UseWebSocketReturn {
         autoPauseRequestedRef.current = false;
         needsResumeFromRef.current = false;
 
-        // Handle unauthorized - redirect to login
+        // Handle unauthorized - trigger logout
         if (event.code === 4401) {
-          updateStatusRef.current.fn('Session expired - redirecting to login', 'error');
-          window.location.reload(); // Auth check will redirect to login
+          updateStatusRef.current.fn('Session expired', 'error');
+          onUnauthorizedRef.current?.();
           return;
         }
 

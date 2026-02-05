@@ -19,4 +19,8 @@ export const config = {
 
   // JWT
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-in-production',
+
+  // Access control - comma-separated Discord user IDs (empty = allow all)
+  // Supports both ALLOWED_DISCORD_IDS and ALLOWED_DISCORD_ID
+  allowedDiscordIds: (process.env.ALLOWED_DISCORD_IDS || process.env.ALLOWED_DISCORD_ID)?.split(',').map((id) => id.trim()).filter(Boolean) ?? [],
 } as const;

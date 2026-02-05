@@ -7,6 +7,7 @@ import { AudioPlayer } from './audio-player';
 import { QueueState } from './queue-manager';
 import { SessionStore, UserSession } from './session-store';
 import { verifyToken, JwtPayload } from './auth/jwt';
+import { config } from './config';
 
 interface AuthenticatedClient {
   ws: WebSocket;
@@ -112,7 +113,16 @@ export class WebSocketHandler {
     const token = cookies.auth;
     if (!token) return null;
 
-    return verifyToken(token);
+    const payload = verifyToken(token);
+    if (!payload) return null;
+
+    // Check whitelist
+    if (config.allowedDiscordIds.length > 0 && !config.allowedDiscordIds.includes(payload.sub)) {
+      console.log(`[WebSocket] Access denied for user ${payload.username} (${payload.sub}) - not in whitelist`);
+      return null;
+    }
+
+    return payload;
   }
 
   private setupQueueManagerForSession(session: UserSession): void {

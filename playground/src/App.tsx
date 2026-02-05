@@ -26,6 +26,7 @@ function PlayerApp() {
   const [urlInput, setUrlInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
+  const { forceLogout } = useAuth();
 
   const {
     isConnected,
@@ -48,7 +49,7 @@ function PlayerApp() {
     skip,
     previous,
     clearQueue,
-  } = useWebSocket();
+  } = useWebSocket({ onUnauthorized: forceLogout });
 
   // Handle error toast display
   const errorStatus = statusType === 'error' ? status : null;

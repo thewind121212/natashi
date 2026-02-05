@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
 interface User {
   id: string;
@@ -12,6 +12,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: () => void;
   logout: () => Promise<void>;
+  forceLogout: () => void; // Called when session is invalidated (e.g., WebSocket 4401)
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -53,6 +54,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const forceLogout = () => {
+    // Immediately clear user state without API call (session already invalid)
+    setUser(null);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -61,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         login,
         logout,
+        forceLogout,
       }}
     >
       {children}
@@ -68,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {

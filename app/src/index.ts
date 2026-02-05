@@ -105,6 +105,14 @@ async function main(): Promise<void> {
     console.log('[WebSocket] Debug mode enabled via DEBUG_AUDIO=1');
   }
 
+  // Log access control status
+  if (config.allowedDiscordIds.length > 0) {
+    console.log(`[Auth] Whitelist enabled: ${config.allowedDiscordIds.length} user(s) allowed`);
+    console.log(`[Auth] Allowed IDs: ${config.allowedDiscordIds.join(', ')}`);
+  } else {
+    console.log('[Auth] Whitelist disabled (all users allowed)');
+  }
+
   // Start Express server (always)
   await startExpressServer();
 

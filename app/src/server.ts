@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import { ApiClient } from './api-client';
 import { discordOAuth } from './auth/discord-oauth';
 import { signToken, verifyToken } from './auth/jwt';
+import { config } from './config';
 
 const PORT = 3000;
 
@@ -53,6 +54,15 @@ export function createServer(): Express {
       const tokens = await discordOAuth.exchangeCode(code);
       const user = await discordOAuth.getUser(tokens.access_token);
 
+      // Check if user is allowed (whitelist)
+      if (config.allowedDiscordIds.length > 0 && !config.allowedDiscordIds.includes(user.id)) {
+        console.log(`[Auth] Access denied for user ${user.username} (${user.id})`);
+        res.clearCookie('oauth_state');
+        res.clearCookie('auth'); // Clear any existing session
+        res.status(403).send('Access denied. Your Discord account is not authorized to use this application.');
+        return;
+      }
+
       const jwt = signToken({
         sub: user.id,
         username: user.global_name || user.username,
@@ -83,6 +93,14 @@ export function createServer(): Express {
 
     const payload = verifyToken(token);
     if (!payload) {
+      res.json({ user: null });
+      return;
+    }
+
+    // Check if user is still in whitelist (for existing sessions)
+    if (config.allowedDiscordIds.length > 0 && !config.allowedDiscordIds.includes(payload.sub)) {
+      console.log(`[Auth] Session invalidated - user ${payload.username} (${payload.sub}) not in whitelist`);
+      res.clearCookie('auth');
       res.json({ user: null });
       return;
     }
