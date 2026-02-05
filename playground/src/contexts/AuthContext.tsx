@@ -17,13 +17,22 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+function getApiBaseUrl(): string {
+  const apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+  if (apiBase && apiBase.trim()) {
+    return apiBase.trim().replace(/\/$/, ''); // Remove trailing slash
+  }
+  return ''; // Empty string = relative paths (same origin)
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const apiBase = getApiBaseUrl();
 
   useEffect(() => {
     // Check if user is already authenticated
-    fetch('/auth/me')
+    fetch(`${apiBase}/auth/me`)
       .then((res) => res.json())
       .then((data) => {
         if (data.user) {
@@ -40,12 +49,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = () => {
     // Redirect to Discord OAuth
-    window.location.href = '/auth/discord';
+    window.location.href = `${apiBase}/auth/discord`;
   };
 
   const logout = async () => {
     try {
-      await fetch('/auth/logout', { method: 'POST' });
+      await fetch(`${apiBase}/auth/logout`, { method: 'POST' });
       setUser(null);
       // Reload to clear any cached state
       window.location.reload();
