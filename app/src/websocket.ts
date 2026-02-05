@@ -156,8 +156,8 @@ export class WebSocketHandler {
         this.handleGoEvent(event);
       });
 
-      this.socketClient.on('audio', (data: Buffer) => {
-        this.handleAudioData(data);
+      this.socketClient.on('audio', ({ sessionId, data }: { sessionId: string; data: Buffer }) => {
+        this.handleAudioData(sessionId, data);
       });
 
       this.socketClient.on('close', () => {
@@ -179,35 +179,33 @@ export class WebSocketHandler {
     }
   }
 
-  private handleAudioData(data: Buffer): void {
-    // Find which user session this audio belongs to
-    // For now, route to the session that has an active sessionId
-    // In the future, Go could send session ID in audio packets
+  private handleAudioData(sessionId: string, data: Buffer): void {
+    // Find session by session ID directly (no loop needed)
+    const session = this.sessionStore.findBySessionId(sessionId);
+    if (!session) {
+      // Unknown session - might be stale, drop packet silently
+      return;
+    }
 
-    for (const session of this.sessionStore.getAll()) {
-      if (!session.currentSessionId || session.isPaused) continue;
+    if (session.isPaused) return;
 
-      session.bytesReceived += data.length;
+    session.bytesReceived += data.length;
 
-      // Route audio based on mode
-      if (this.webMode && session.isStreamReady) {
-        this.broadcastBinaryToUser(session.userId, data);
-      } else if (this.debugMode && session.isStreamReady) {
-        this.audioPlayer.write(data);
-      }
+    // Route audio based on mode
+    if (this.webMode && session.isStreamReady) {
+      this.broadcastBinaryToUser(session.userId, data);
+    } else if (this.debugMode && session.isStreamReady) {
+      this.audioPlayer.write(data);
+    }
 
-      // Update progress every ~100KB (non-web mode)
-      if (!this.webMode && session.bytesReceived % 100000 < data.length) {
-        const playbackSecs = session.bytesReceived / 192000;
-        this.broadcastJsonToUser(session.userId, {
-          type: 'progress',
-          bytes: session.bytesReceived,
-          playback_secs: playbackSecs,
-        });
-      }
-
-      // Currently only one session streams at a time, so break after finding one
-      break;
+    // Update progress every ~100KB (non-web mode)
+    if (!this.webMode && session.bytesReceived % 100000 < data.length) {
+      const playbackSecs = session.bytesReceived / 192000;
+      this.broadcastJsonToUser(session.userId, {
+        type: 'progress',
+        bytes: session.bytesReceived,
+        playback_secs: playbackSecs,
+      });
     }
   }
 

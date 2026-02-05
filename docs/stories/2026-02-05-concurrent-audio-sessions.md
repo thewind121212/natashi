@@ -124,7 +124,7 @@ sequenceDiagram
 ### Behavior changes
 
 1. **Remove "stop all" logic**: Only stop the session with matching ID (if exists), not all sessions
-2. **Add session ID to audio packet header**: `[4-byte length][36-byte session_id][audio data]`
+2. **Add session ID to audio packet header**: `[4-byte length][24-byte session_id][audio data]`
 3. **Per-session goroutines**: Each session runs independently with its own FFmpeg process
 4. **Session-aware routing in Node.js**: Parse session ID from packet header, route to correct session
 
@@ -134,7 +134,7 @@ sequenceDiagram
 |------|--------|
 | `internal/server/session.go` | Remove stop-all loop, keep per-session goroutine pattern |
 | `internal/server/session.go:270-290` | Add session ID to packet header before audio data |
-| `app/src/socket-client.ts` | Parse 36-byte session ID from header, emit `audio` event with session ID |
+| `app/src/socket-client.ts` | Parse 24-byte session ID from header, emit `audio` event with session ID |
 | `app/src/websocket.ts:182-211` | Use session ID from packet to route directly (no loop) |
 
 ### Protocol change
@@ -150,8 +150,8 @@ sequenceDiagram
 **New packet format:**
 ```
 ┌─────────────────────┬─────────────────────┬─────────────────────┐
-│ Length (4 bytes)    │ Session ID (36 b)   │ Audio Data          │
-│ Big-endian uint32   │ UUID string         │ Variable length     │
+│ Length (4 bytes)    │ Session ID (24 b)   │ Audio Data          │
+│ Big-endian uint32   │ Padded snowflake    │ Variable length     │
 └─────────────────────┴─────────────────────┴─────────────────────┘
 ```
 
@@ -202,7 +202,7 @@ Note: Length field includes session ID + audio data length.
 
 - **Task G2**: Add session ID to audio packet header
   - File: `internal/server/session.go:275-284`
-  - Change: Include 36-byte session ID before audio data in packet
+  - Change: Include 24-byte session ID before audio data in packet
   - C3 Component: c3-202
 
 - **Task G3**: Add session ID to JSON events
@@ -214,7 +214,7 @@ Note: Length field includes session ID + audio data length.
 
 - **Task N1**: Update SocketClient to parse session ID from audio packets
   - File: `app/src/socket-client.ts:196-206`
-  - Change: Read 36-byte session ID after length, emit `audio` event with `{sessionId, data}`
+  - Change: Read 24-byte session ID after length, emit `audio` event with `{sessionId, data}`
   - C3 Component: c3-105
 
 - **Task N2**: Update WebSocketHandler to route audio by session ID

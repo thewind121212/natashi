@@ -139,12 +139,14 @@ export class SocketClient extends EventEmitter {
   private processBuffer(): void {
     while (this.buffer.length > 0) {
       if (this.readingAudio) {
-        // Reading binary audio data
+        // Reading binary audio data (24-byte session ID + audio)
         if (this.buffer.length >= this.audioLength) {
-          const audioData = this.buffer.subarray(0, this.audioLength);
+          const SESSION_ID_LEN = 24;
+          const sessionId = this.buffer.subarray(0, SESSION_ID_LEN).toString('utf8').trim();
+          const audioData = this.buffer.subarray(SESSION_ID_LEN, this.audioLength);
           this.buffer = this.buffer.subarray(this.audioLength);
           this.readingAudio = false;
-          this.emit('audio', audioData);
+          this.emit('audio', { sessionId, data: audioData });
         } else {
           break; // Need more data
         }
@@ -227,7 +229,8 @@ export class SocketClient extends EventEmitter {
     this.jitterBuffer = new JitterBuffer(this.audioStream);
 
     // Route audio events through jitter buffer for smooth playback
-    const audioHandler = (data: Buffer) => {
+    // Note: audio event now emits { sessionId, data } after concurrent sessions update
+    const audioHandler = ({ data }: { sessionId: string; data: Buffer }) => {
       if (this.jitterBuffer) {
         this.jitterBuffer.push(data);
       }
