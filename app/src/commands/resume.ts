@@ -3,6 +3,7 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
+  EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
 import { voiceManager } from '../voice/manager';
@@ -52,9 +53,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Then unpause Discord player
     voiceManager.unpause(guildId);
 
-    await interaction.reply({
-      content: `Resumed: **${session.currentTrack.title}**`,
-    });
+    const embed = new EmbedBuilder()
+      .setColor(0x57F287)
+      .setTitle('Resumed')
+      .setDescription(session.currentTrack.title);
+
+    await interaction.reply({ embeds: [embed] });
   } catch (error) {
     console.error('[Resume] Error:', error);
     await interaction.reply({

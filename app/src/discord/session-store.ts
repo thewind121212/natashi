@@ -6,6 +6,7 @@ import { QueueManager, Track } from '../queue-manager';
 export interface GuildSession {
   guildId: string;
   isPaused: boolean;
+  isTransitioning: boolean; // Prevents concurrent skip/previous race conditions
   currentTrack: Track | null;
   queueManager: QueueManager;
   playRequestId: number;
@@ -22,6 +23,7 @@ export class DiscordSessionStore {
       session = {
         guildId,
         isPaused: false,
+        isTransitioning: false,
         currentTrack: null,
         queueManager: new QueueManager(),
         playRequestId: 0,
@@ -41,6 +43,7 @@ export class DiscordSessionStore {
     const session = this.sessions.get(guildId);
     if (session) {
       session.isPaused = false;
+      session.isTransitioning = false;
       session.currentTrack = null;
       session.queueManager.clear();
       session.playRequestId = 0;

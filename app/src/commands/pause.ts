@@ -3,6 +3,7 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
+  EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
 import { voiceManager } from '../voice/manager';
@@ -52,9 +53,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Then pause Go server (stops audio generation)
     await apiClient.pause(guildId);
 
-    await interaction.reply({
-      content: `Paused: **${session.currentTrack.title}**`,
-    });
+    const embed = new EmbedBuilder()
+      .setColor(0xFEE75C)
+      .setTitle('Paused')
+      .setDescription(session.currentTrack.title);
+
+    await interaction.reply({ embeds: [embed] });
   } catch (error) {
     console.error('[Pause] Error:', error);
     await interaction.reply({

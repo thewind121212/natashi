@@ -1,4 +1,4 @@
-// /previous command - go back to the previous track
+// /jump command - jump to a specific track in the queue by position
 
 import {
   SlashCommandBuilder,
@@ -15,8 +15,15 @@ const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
 
 export const data = new SlashCommandBuilder()
-  .setName('previous')
-  .setDescription('Go back to the previous track');
+  .setName('jump')
+  .setDescription('Jump to a specific track in the queue')
+  .addIntegerOption((option) =>
+    option
+      .setName('position')
+      .setDescription('Track position in the queue (1, 2, 3...)')
+      .setRequired(true)
+      .setMinValue(1)
+  );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
@@ -39,7 +46,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  // Prevent concurrent transitions (rapid commands)
+  // Prevent concurrent transitions
   if (session.isTransitioning) {
     await interaction.reply({
       content: 'A track change is already in progress, please wait.',
@@ -48,11 +55,34 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  const prevTrack = session.queueManager.previous();
+  const position = interaction.options.getInteger('position', true);
+  const queue = session.queueManager.getQueue();
 
-  if (!prevTrack) {
+  // Validate position (user provides 1-based, internal is 0-based)
+  if (position < 1 || position > queue.length) {
     await interaction.reply({
-      content: 'Already at the beginning of the queue.',
+      content: `Invalid position. Queue has ${queue.length} track${queue.length === 1 ? '' : 's'} (1-${queue.length}).`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const targetIndex = position - 1;
+
+  // Check if already playing this track
+  if (targetIndex === session.queueManager.getCurrentIndex()) {
+    await interaction.reply({
+      content: `Already playing track #${position}.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const track = session.queueManager.startPlaying(targetIndex);
+
+  if (!track) {
+    await interaction.reply({
+      content: 'Failed to jump to that track.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -64,33 +94,32 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   await interaction.deferReply();
 
   try {
-    // Stop current playback (suppress auto-advance since we already moved)
+    // Stop current playback (suppress auto-advance since we set the index manually)
     session.suppressAutoAdvanceFor.add(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
-    // Start previous track
-    session.currentTrack = prevTrack;
+    // Start target track
+    session.currentTrack = track;
     session.isPaused = false;
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
     voiceManager.playStream(guildId, audioStream);
-    await apiClient.play(guildId, prevTrack.url, 'opus');
+    await apiClient.play(guildId, track.url, 'opus');
 
     const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('Previous Track')
-      .setDescription(`Now playing: **${prevTrack.title}**`)
-      .setThumbnail(prevTrack.thumbnail || null)
-      .addFields({
-        name: 'Duration',
-        value: formatDuration(prevTrack.duration),
-        inline: true,
-      });
+      .setColor(0x9B59B6)
+      .setTitle('Now Playing')
+      .setDescription(track.title)
+      .setThumbnail(track.thumbnail || null)
+      .addFields(
+        { name: 'Duration', value: formatDuration(track.duration), inline: true },
+        { name: 'Position', value: `#${position} of ${queue.length}`, inline: true }
+      );
 
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
-    console.error('[Previous] Error:', error);
+    console.error('[Jump] Error:', error);
     await interaction.editReply({
       content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
     });

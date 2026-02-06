@@ -4,7 +4,8 @@ import * as play from './play';
 import * as stop from './stop';
 import * as pause from './pause';
 import * as resume from './resume';
-import * as skip from './skip';
+import * as next from './next';
+import * as jump from './jump';
 import * as queue from './queue';
 import * as nowplaying from './nowplaying';
 import * as previous from './previous';
@@ -15,7 +16,8 @@ export const commands = [
   stop,
   pause,
   resume,
-  skip,
+  next,
+  jump,
   queue,
   nowplaying,
   previous,

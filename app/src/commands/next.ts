@@ -1,4 +1,4 @@
-// /skip command - skip to the next track in queue
+// /next command - skip to the next track in queue
 
 import {
   SlashCommandBuilder,
@@ -15,7 +15,7 @@ const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
 
 export const data = new SlashCommandBuilder()
-  .setName('skip')
+  .setName('next')
   .setDescription('Skip to the next track in queue');
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -39,6 +39,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  // Prevent concurrent transitions (rapid double-skip)
+  if (session.isTransitioning) {
+    await interaction.reply({
+      content: 'A track change is already in progress, please wait.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   const nextTrack = session.queueManager.skip();
 
   if (!nextTrack) {
@@ -48,6 +57,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     });
     return;
   }
+
+  // Lock transition BEFORE any async operation (prevents race with concurrent commands)
+  session.isTransitioning = true;
 
   await interaction.deferReply();
 
@@ -66,9 +78,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await apiClient.play(guildId, nextTrack.url, 'opus');
 
     const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('Skipped')
-      .setDescription(`Now playing: **${nextTrack.title}**`)
+      .setColor(0x9B59B6)
+      .setTitle('Now Playing')
+      .setDescription(nextTrack.title)
       .setThumbnail(nextTrack.thumbnail || null)
       .addFields({
         name: 'Duration',
@@ -78,10 +90,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
-    console.error('[Skip] Error:', error);
+    console.error('[Next] Error:', error);
     await interaction.editReply({
       content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
     });
+  } finally {
+    session.isTransitioning = false;
   }
 }
 
