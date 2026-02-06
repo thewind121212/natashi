@@ -1,7 +1,8 @@
 // SQLite Store - Persistence layer for user sessions
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import { Track } from './queue-manager';
 import path from 'path';
+import fs from 'fs';
 
 export interface SessionData {
   userId: string;
@@ -14,7 +15,7 @@ export interface SessionData {
 }
 
 export class SqliteStore {
-  private db: Database.Database | null = null;
+  private db: Database | null = null;
   private dbPath: string;
 
   constructor(dbPath?: string) {
@@ -25,7 +26,6 @@ export class SqliteStore {
   init(): void {
     // Ensure data directory exists
     const dataDir = path.dirname(this.dbPath);
-    const fs = require('fs');
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
@@ -33,7 +33,7 @@ export class SqliteStore {
     this.db = new Database(this.dbPath);
 
     // Enable WAL mode for better concurrent access
-    this.db.pragma('journal_mode = WAL');
+    this.db.exec('PRAGMA journal_mode = WAL');
 
     // Create table if not exists
     this.db.exec(`
@@ -55,7 +55,7 @@ export class SqliteStore {
   saveSession(session: SessionData): void {
     if (!this.db) throw new Error('Database not initialized');
 
-    const stmt = this.db.prepare(`
+    const stmt = this.db.query(`
       INSERT OR REPLACE INTO user_sessions
       (user_id, username, avatar, queue, current_index, is_paused, playback_offset_sec, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
@@ -81,7 +81,7 @@ export class SqliteStore {
   loadSession(userId: string): SessionData | null {
     if (!this.db) throw new Error('Database not initialized');
 
-    const stmt = this.db.prepare(`
+    const stmt = this.db.query(`
       SELECT user_id, username, avatar, queue, current_index, is_paused, playback_offset_sec
       FROM user_sessions WHERE user_id = ?
     `);
@@ -94,7 +94,7 @@ export class SqliteStore {
       current_index: number;
       is_paused: number;
       playback_offset_sec: number;
-    } | undefined;
+    } | null;
 
     if (!row) return null;
 
@@ -124,7 +124,7 @@ export class SqliteStore {
   deleteSession(userId: string): void {
     if (!this.db) throw new Error('Database not initialized');
 
-    const stmt = this.db.prepare('DELETE FROM user_sessions WHERE user_id = ?');
+    const stmt = this.db.query('DELETE FROM user_sessions WHERE user_id = ?');
     stmt.run(userId);
     console.log(`[SqliteStore] Deleted session for user ${userId}`);
   }
@@ -132,7 +132,7 @@ export class SqliteStore {
   loadAllSessions(): SessionData[] {
     if (!this.db) throw new Error('Database not initialized');
 
-    const stmt = this.db.prepare(`
+    const stmt = this.db.query(`
       SELECT user_id, username, avatar, queue, current_index, is_paused, playback_offset_sec
       FROM user_sessions
     `);

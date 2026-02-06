@@ -107,6 +107,9 @@ function PlayerApp() {
       resume();
     } else if (isPlaying) {
       pause();
+    } else if (queue.length > 0 && currentIndex >= 0) {
+      // Not playing, not paused, but have tracks in queue - start playing
+      playFromQueue(currentIndex);
     }
   };
 
