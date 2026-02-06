@@ -7,6 +7,8 @@ import {
   GuildMember,
   EmbedBuilder,
   MessageFlags,
+  TextChannel,
+  Client,
 } from 'discord.js';
 import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
@@ -32,6 +34,9 @@ interface FastMetadata {
 
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
+
+// Store Discord client reference for sending messages on auto-advance
+let discordClient: Client | null = null;
 
 // Extract video ID from YouTube URL
 function extractVideoId(url: string): string | null {
@@ -192,20 +197,89 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
 }
 
 // Helper: Play a track for a guild
-async function playTrack(guildId: string, track: Track): Promise<void> {
+// Waits for Go's 'ready' event before starting Discord playback to avoid stream timeout
+async function playTrack(guildId: string, track: Track, sendNowPlaying = false): Promise<void> {
+  console.log(`[Play] playTrack called with guildId="${guildId}" (len=${guildId.length})`);
   const session = discordSessions.get(guildId);
-  if (!session) return;
+  if (!session) {
+    console.log(`[Play] No session found for guildId="${guildId}"`);
+    return;
+  }
 
   session.currentTrack = track;
   session.isPaused = false;
 
-  // Create new audio stream
-  const audioStream = socketClient.createDirectStreamForSession(guildId);
-  voiceManager.playStream(guildId, audioStream);
+  // Stop current player before starting new stream
+  voiceManager.stop(guildId);
 
-  // Start playback
+  // End any existing stream
+  socketClient.endAudioStreamForSession(guildId);
+
+  // Start Go playback first, then wait for 'ready' event before creating stream
+  // This avoids Discord closing the empty stream while waiting for yt-dlp
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socketClient.off('event', handler);
+      reject(new Error('Timeout waiting for ready event'));
+    }, 30000); // 30s timeout for yt-dlp extraction
+
+    const handler = (event: { type: string; session_id: string }) => {
+      if (event.session_id === guildId && event.type === 'ready') {
+        clearTimeout(timeout);
+        socketClient.off('event', handler);
+        resolve();
+      } else if (event.session_id === guildId && event.type === 'error') {
+        clearTimeout(timeout);
+        socketClient.off('event', handler);
+        reject(new Error('Playback error'));
+      }
+    };
+
+    socketClient.on('event', handler);
+  });
+
+  // Tell Go to start (this triggers yt-dlp extraction)
   await apiClient.play(guildId, track.url, 'opus');
-  console.log(`[Play] Now playing: ${track.title}`);
+
+  try {
+    // Wait for Go to be ready (yt-dlp done, FFmpeg started)
+    await readyPromise;
+    console.log(`[Play] Go is ready, creating stream for Discord`);
+
+    // NOW create stream and start Discord playback
+    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const success = voiceManager.playStream(guildId, audioStream);
+    if (!success) {
+      console.error(`[Play] Failed to start stream for guild ${guildId} - not connected to voice`);
+      return;
+    }
+
+    console.log(`[Play] Now playing: ${track.title}`);
+
+    // Send "Now Playing" message to channel (for auto-advance)
+    if (sendNowPlaying && discordClient && session.textChannelId) {
+      try {
+        const channel = await discordClient.channels.fetch(session.textChannelId);
+        if (channel && channel.isTextBased()) {
+          const embed = new EmbedBuilder()
+            .setColor(0x57F287) // Green
+            .setTitle('Now Playing')
+            .setDescription(`**${track.title}**`)
+            .setThumbnail(track.thumbnail || null)
+            .addFields({
+              name: 'Duration',
+              value: formatDuration(track.duration),
+              inline: true,
+            });
+          await (channel as TextChannel).send({ embeds: [embed] });
+        }
+      } catch (err) {
+        console.error(`[Play] Failed to send Now Playing message:`, err);
+      }
+    }
+  } catch (err) {
+    console.error(`[Play] Error waiting for ready:`, err);
+  }
 }
 
 // Helper: Setup event handlers for auto-advance
@@ -235,7 +309,7 @@ function setupEventHandlers(): void {
       const nextTrack = session.queueManager.currentFinished();
       if (nextTrack) {
         console.log(`[Play] Auto-advancing to: ${nextTrack.title}`);
-        await playTrack(event.session_id, nextTrack);
+        await playTrack(event.session_id, nextTrack, true); // Send "Now Playing" message
       } else {
         // Queue finished
         console.log(`[Play] Queue finished for guild ${event.session_id.slice(0, 8)}`);
@@ -286,6 +360,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Get or create session for this guild
     const session = discordSessions.getOrCreate(guildId);
     const wasPlaying = session.currentTrack !== null;
+
+    // Store client and channel for auto-advance messages
+    discordClient = interaction.client;
+    session.textChannelId = interaction.channelId;
 
     // Determine if input is URL or search query
     let url = query;
@@ -376,7 +454,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
           // Show embed immediately (fast response)
           const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
+            .setColor(0x57F287) // Green
             .setTitle('Now Playing')
             .setDescription(track.title)
             .setThumbnail(track.thumbnail || null)
@@ -396,13 +474,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         const queuePos = session.queueManager.getQueue().length;
 
         const embed = new EmbedBuilder()
-          .setColor(0x5865F2)
+          .setColor(0xFF69B4) // Pink
           .setTitle('Added to Queue')
-          .setDescription(title)
+          .setDescription(`**${title}**`)
           .setThumbnail(thumbnail)
           .addFields(
             { name: 'Duration', value: formatDuration(duration), inline: true },
-            { name: 'Position', value: `#${queuePos}`, inline: true }
+            { name: 'Position in Queue', value: `#${queuePos}`, inline: true }
           );
 
         await interaction.editReply({ embeds: [embed] });

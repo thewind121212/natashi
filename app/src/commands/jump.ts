@@ -103,12 +103,40 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     session.currentTrack = track;
     session.isPaused = false;
 
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
-    voiceManager.playStream(guildId, audioStream);
+    // Start Go playback first, wait for 'ready' event, then create Discord stream
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        socketClient.off('event', handler);
+        reject(new Error('Timeout waiting for ready event'));
+      }, 30000);
+
+      const handler = (event: { type: string; session_id: string }) => {
+        if (event.session_id === guildId && event.type === 'ready') {
+          clearTimeout(timeout);
+          socketClient.off('event', handler);
+          resolve();
+        } else if (event.session_id === guildId && event.type === 'error') {
+          clearTimeout(timeout);
+          socketClient.off('event', handler);
+          reject(new Error('Playback error'));
+        }
+      };
+
+      socketClient.on('event', handler);
+    });
+
     await apiClient.play(guildId, track.url, 'opus');
+    await readyPromise;
+
+    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const success = voiceManager.playStream(guildId, audioStream);
+    if (!success) {
+      await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
+      return;
+    }
 
     const embed = new EmbedBuilder()
-      .setColor(0x9B59B6)
+      .setColor(0x57F287) // Green
       .setTitle('Now Playing')
       .setDescription(track.title)
       .setThumbnail(track.thumbnail || null)

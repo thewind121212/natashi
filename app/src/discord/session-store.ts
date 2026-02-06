@@ -5,6 +5,7 @@ import { QueueManager, Track } from '../queue-manager';
 
 export interface GuildSession {
   guildId: string;
+  textChannelId: string | null; // For sending "Now Playing" messages on auto-advance
   isPaused: boolean;
   isTransitioning: boolean; // Prevents concurrent skip/previous race conditions
   currentTrack: Track | null;
@@ -22,6 +23,7 @@ export class DiscordSessionStore {
     if (!session) {
       session = {
         guildId,
+        textChannelId: null,
         isPaused: false,
         isTransitioning: false,
         currentTrack: null,

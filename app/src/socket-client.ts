@@ -256,6 +256,16 @@ export class SocketClient extends EventEmitter {
   private routeAudioToSession(sessionId: string, data: Buffer): void {
     const session = this.sessionStreams.get(sessionId);
     if (session) {
+      // Check if stream was closed by Discord (happens when stream is empty during yt-dlp extraction)
+      if (session.stream.writableEnded || session.stream.destroyed) {
+        // Stream was closed, but we still have it in the map - recreate it
+        console.log(`[SocketClient] Recreating closed stream for session ${sessionId.slice(0, 8)}`);
+        const newStream = new PassThrough();
+        session.stream = newStream;
+        // Note: The old AudioResource in Discord is now orphaned, but new data will buffer
+        // until someone creates a new AudioResource from this stream
+      }
+
       if (session.jitterBuffer) {
         // Use jitter buffer for PCM/raw frame streams
         session.jitterBuffer.push(data);
@@ -263,6 +273,10 @@ export class SocketClient extends EventEmitter {
         // Direct pass-through for container formats (Ogg/Opus)
         session.stream.push(data);
       }
+    } else {
+      // Debug: log when audio can't be routed (session not found)
+      const knownSessions = Array.from(this.sessionStreams.keys()).join(', ');
+      console.log(`[SocketClient] No stream for session "${sessionId}" (len=${sessionId.length}), known: [${knownSessions}]`);
     }
   }
 
@@ -299,10 +313,13 @@ export class SocketClient extends EventEmitter {
     const stream = new PassThrough();
 
     this.sessionStreams.set(sessionId, { stream, jitterBuffer: null });
+    console.log(`[SocketClient] Created stream for session "${sessionId}" (len=${sessionId.length}), total: ${this.sessionStreams.size}`);
 
-    // Clean up when stream is destroyed
-    stream.on('close', () => {
-      this.sessionStreams.delete(sessionId);
+    // Note: Don't delete from map on 'close' - Discord may close empty streams early
+    // while waiting for Go to start sending data. Cleanup is done explicitly via
+    // endAudioStreamForSession() when track finishes or changes.
+    stream.on('error', (err) => {
+      console.error(`[SocketClient] Stream ERROR for session "${sessionId}":`, err.message);
     });
 
     return stream;

@@ -5,7 +5,7 @@ const API_BASE = `http://localhost:${GO_API_PORT}`;
 
 export interface PlayRequest {
   url: string;
-  format?: 'pcm' | 'webm' | 'raw' | 'web';
+  format?: 'pcm' | 'opus' | 'web';
   start_at?: number;
 }
 

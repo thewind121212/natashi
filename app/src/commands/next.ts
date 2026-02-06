@@ -73,12 +73,45 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     session.currentTrack = nextTrack;
     session.isPaused = false;
 
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
-    voiceManager.playStream(guildId, audioStream);
+    // Start Go playback first, wait for 'ready' event, then create Discord stream
+    // This avoids Discord closing empty stream while waiting for yt-dlp
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        socketClient.off('event', handler);
+        reject(new Error('Timeout waiting for ready event'));
+      }, 30000);
+
+      const handler = (event: { type: string; session_id: string }) => {
+        if (event.session_id === guildId && event.type === 'ready') {
+          clearTimeout(timeout);
+          socketClient.off('event', handler);
+          resolve();
+        } else if (event.session_id === guildId && event.type === 'error') {
+          clearTimeout(timeout);
+          socketClient.off('event', handler);
+          reject(new Error('Playback error'));
+        }
+      };
+
+      socketClient.on('event', handler);
+    });
+
+    console.log(`[Next] Calling apiClient.play`);
     await apiClient.play(guildId, nextTrack.url, 'opus');
 
+    // Wait for Go to be ready
+    await readyPromise;
+    console.log(`[Next] Go is ready, creating stream for Discord`);
+
+    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const success = voiceManager.playStream(guildId, audioStream);
+    if (!success) {
+      await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
+      return;
+    }
+
     const embed = new EmbedBuilder()
-      .setColor(0x9B59B6)
+      .setColor(0x57F287) // Green
       .setTitle('Now Playing')
       .setDescription(nextTrack.title)
       .setThumbnail(nextTrack.thumbnail || null)
