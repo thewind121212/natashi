@@ -23,8 +23,72 @@ interface YouTubeSearchItem {
   length?: { simpleText: string };
 }
 
+interface YouTubeVideoDetails {
+  title?: string;
+  length?: { simpleText: string };
+  thumbnail?: { thumbnails?: Array<{ url: string }> };
+}
+
+interface FastMetadata {
+  title: string;
+  duration: number;
+  thumbnail: string;
+  url: string;
+}
+
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
+
+// Extract video ID from YouTube URL
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/.*[?&]v=([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// Parse duration string like "3:45" or "1:23:45" to seconds
+function parseDuration(durationStr: string): number {
+  if (!durationStr) return 0;
+  const parts = durationStr.split(':').map(Number);
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  } else if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  return 0;
+}
+
+// Get fast metadata using youtube-search-api (much faster than yt-dlp)
+async function getFastMetadata(url: string): Promise<FastMetadata | null> {
+  const videoId = extractVideoId(url);
+  if (!videoId) return null;
+
+  try {
+    const details = await YouTubeSearch.GetVideoDetails(videoId) as YouTubeVideoDetails;
+    if (!details) return null;
+
+    return {
+      title: details.title || 'Unknown',
+      duration: parseDuration(details.length?.simpleText || ''),
+      thumbnail: details.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+    };
+  } catch {
+    // Fallback to basic thumbnail
+    return {
+      title: 'Loading...',
+      duration: 0,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+    };
+  }
+}
 
 let eventHandlersAttached = false;
 
@@ -233,11 +297,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       }
     }
 
-    // Fetch metadata to check if playlist
-    const metadata = await apiClient.getMetadata(url);
+    // Check if it's a playlist URL (quick check)
+    const isPlaylistUrl = url.includes('list=') || url.includes('/playlist');
 
-    if (metadata.is_playlist) {
-      // Handle playlist
+    if (isPlaylistUrl) {
+      // Handle playlist - need full metadata from Go
       await interaction.editReply('Loading playlist...');
 
       const playlist = await apiClient.getPlaylist(url);
@@ -281,8 +345,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       await interaction.editReply({ embeds: [embed] });
 
     } else {
-      // Single track
-      session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
+      // Single track - use fast metadata from youtube-search-api
+      const fastMeta = await getFastMetadata(url);
+      const title = fastMeta?.title || 'Unknown';
+      const duration = fastMeta?.duration || 0;
+      const thumbnail = fastMeta?.thumbnail || null;
+
+      session.queueManager.addTrack(url, title, duration, thumbnail || undefined);
 
       if (!wasPlaying) {
         // Not playing - start this track
@@ -292,8 +361,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           const voiceChannel = member.voice.channel;
           voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
 
-          await playTrack(guildId, track);
-
+          // Show embed immediately (fast response)
           const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('Now Playing')
@@ -305,6 +373,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
               inline: true,
             });
 
+          // Start playback in background (don't await - let UI respond fast)
+          playTrack(guildId, track);
+
           await interaction.editReply({ embeds: [embed] });
         }
       } else {
@@ -314,10 +385,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         const embed = new EmbedBuilder()
           .setColor(0x5865F2)
           .setTitle('Added to Queue')
-          .setDescription(metadata.title)
-          .setThumbnail(metadata.thumbnail || null)
+          .setDescription(title)
+          .setThumbnail(thumbnail)
           .addFields(
-            { name: 'Duration', value: formatDuration(metadata.duration), inline: true },
+            { name: 'Duration', value: formatDuration(duration), inline: true },
             { name: 'Position', value: `#${queuePos}`, inline: true }
           );
 
