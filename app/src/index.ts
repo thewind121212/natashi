@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { createServer, startServer } from './server';
 import { WebSocketHandler } from './websocket';
+import { SqliteStore } from './sqlite-store';
 import { createServer as createHttpServer } from 'http';
 import { config } from './config';
 import {
@@ -15,9 +16,13 @@ import { commands } from './commands';
 let discordClient: Client | null = null;
 
 async function startExpressServer(): Promise<void> {
+  // Initialize SQLite store for session persistence
+  const sqliteStore = new SqliteStore();
+  sqliteStore.init();
+
   const app = createServer();
   const httpServer = createHttpServer(app);
-  const wsHandler = new WebSocketHandler(httpServer);
+  const wsHandler = new WebSocketHandler(httpServer, sqliteStore);
 
   const host = process.env.SERVER_HOST || '0.0.0.0';
   await new Promise<void>((resolve) => {

@@ -6,6 +6,7 @@ import { ApiClient } from './api-client';
 import { AudioPlayer } from './audio-player';
 import { QueueState } from './queue-manager';
 import { SessionStore, UserSession } from './session-store';
+import { SqliteStore } from './sqlite-store';
 import { verifyToken, JwtPayload } from './auth/jwt';
 import { config } from './config';
 
@@ -26,13 +27,13 @@ export class WebSocketHandler {
 
   private static readonly TRANSITION_DEBOUNCE_MS = 150;
 
-  constructor(server: HttpServer) {
+  constructor(server: HttpServer, sqliteStore?: SqliteStore) {
     this.wss = new WebSocketServer({ server });
     // Use shared singleton - same connection as Discord bot
     this.socketClient = SocketClient.getSharedInstance();
     this.apiClient = new ApiClient();
     this.audioPlayer = new AudioPlayer();
-    this.sessionStore = new SessionStore();
+    this.sessionStore = new SessionStore(sqliteStore);
     this.debugMode = process.env.DEBUG_AUDIO === '1';
     this.webMode = process.env.WEB_AUDIO === '1';
     if (this.webMode) {
@@ -128,6 +129,7 @@ export class WebSocketHandler {
   private setupQueueManagerForSession(session: UserSession): void {
     // Remove existing listeners to prevent duplicates
     session.queueManager.removeAllListeners('update');
+    session.queueManager.removeAllListeners('persist');
 
     session.queueManager.on('update', (state: QueueState) => {
       this.broadcastJsonToUser(session.userId, {
@@ -136,6 +138,11 @@ export class WebSocketHandler {
         currentIndex: state.currentIndex,
         nowPlaying: state.nowPlaying,
       });
+    });
+
+    // Persist queue changes to SQLite
+    session.queueManager.on('persist', () => {
+      this.sessionStore.persist(session.userId);
     });
   }
 
@@ -618,6 +625,23 @@ export class WebSocketHandler {
         const seconds = Math.max(0, message.seconds);
         this.log('nodejs', `Resume from ${seconds.toFixed(2)}s requested`, session.userId);
         this.scheduleTransition(session, requestId, () => this.handleResumeFrom(session, seconds, requestId));
+
+      } else if (message.action === 'resetSession') {
+        this.log('nodejs', 'Reset session requested', session.userId);
+        // Stop current playback if any
+        if (session.currentSessionId) {
+          try {
+            await this.apiClient.stop(session.currentSessionId);
+          } catch (err) {
+            this.log('nodejs', `Stop error: ${err}`, session.userId);
+          }
+        }
+        // Reset all state
+        this.resetPlaybackState(session);
+        // Reset session in store (clears queue and deletes from DB)
+        this.sessionStore.resetSession(session.userId);
+        // Notify client
+        this.broadcastJsonToUser(session.userId, { type: 'sessionReset' });
       }
     } catch (err) {
       this.log('nodejs', `Error handling message: ${err}`, session.userId);

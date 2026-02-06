@@ -11,6 +11,8 @@ interface UseAudioPlayerReturn {
   reset: () => void;
   stop: () => void;
   isInitialized: () => boolean;
+  setVolume: (value: number) => void;
+  getVolume: () => number;
 }
 
 /**
@@ -33,6 +35,8 @@ const MAX_BUFFER_SECONDS = 2.0; // 2 seconds max - prevents memory overflow
 export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
   const decoderRef = useRef<OggOpusDecoder | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const volumeRef = useRef(1.0); // Store volume for getVolume
   const nextPlayTimeRef = useRef(0);
   const playedSecondsRef = useRef(0);
   const bufferedSecondsRef = useRef(0);
@@ -50,6 +54,12 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
     if (initializedRef.current) return;
 
     audioContextRef.current = new AudioContext({ sampleRate: 48000 });
+
+    // Create GainNode for volume control
+    gainNodeRef.current = audioContextRef.current.createGain();
+    gainNodeRef.current.gain.value = volumeRef.current;
+    gainNodeRef.current.connect(audioContextRef.current.destination);
+
     decoderRef.current = new OggOpusDecoder({ forceStereo: true });
     await decoderRef.current.ready;
     initializedRef.current = true;
@@ -84,7 +94,12 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
 
       const source = audioContext.createBufferSource();
       source.buffer = buffer;
-      source.connect(audioContext.destination);
+      // Connect through GainNode for volume control
+      if (gainNodeRef.current) {
+        source.connect(gainNodeRef.current);
+      } else {
+        source.connect(audioContext.destination);
+      }
       source.start(nextPlayTimeRef.current);
 
       const duration = buffer.duration;
@@ -179,6 +194,7 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       decoderRef.current = null;
     }
 
+    gainNodeRef.current = null;
     initializedRef.current = false;
   }, [reset]);
 
@@ -186,5 +202,24 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
     return initializedRef.current;
   }, []);
 
-  return { init, playChunk, reset, stop, isInitialized };
+  // Volume control with smooth transition to avoid clicks
+  const setVolume = useCallback((value: number) => {
+    const clampedValue = Math.max(0, Math.min(1, value));
+    volumeRef.current = clampedValue;
+
+    if (gainNodeRef.current && audioContextRef.current) {
+      // Use setTargetAtTime for smooth transition (10ms time constant)
+      gainNodeRef.current.gain.setTargetAtTime(
+        clampedValue,
+        audioContextRef.current.currentTime,
+        0.01
+      );
+    }
+  }, []);
+
+  const getVolume = useCallback(() => {
+    return volumeRef.current;
+  }, []);
+
+  return { init, playChunk, reset, stop, isInitialized, setVolume, getVolume };
 }

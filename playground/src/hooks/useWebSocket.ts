@@ -53,6 +53,7 @@ interface UseWebSocketReturn {
   currentIndex: number;
   nowPlaying: Track | null;
   user: User | null;
+  volume: number;
   play: (url: string) => void;
   stop: () => void;
   pause: () => void;
@@ -64,6 +65,8 @@ interface UseWebSocketReturn {
   skip: () => void;
   previous: () => void;
   clearQueue: () => void;
+  setVolume: (value: number) => void;
+  resetSession: () => void;
 }
 
 export type { Track };
@@ -106,6 +109,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [volume, setVolumeState] = useState(1.0);
   const audioStartedRef = useRef(false);
 
   const getWebSocketUrl = useCallback(() => {
@@ -317,6 +321,24 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       case 'resumed':
         setIsPaused(false);
         updateStatus('▶ Resumed', 'success');
+        break;
+
+      case 'sessionReset':
+        // Full reset - clear everything
+        setIsPlaying(false);
+        setIsPaused(false);
+        setCurrentUrl(null);
+        setNowPlaying(null);
+        setQueue([]);
+        setCurrentIndex(-1);
+        setPlaybackTime(0);
+        playStartTimeRef.current = null;
+        audioStartedRef.current = false;
+        audioProgressOffsetRef.current = 0;
+        lastTickRef.current = null;
+        audioPlayerRef.current.player?.reset();
+        updateStatus('Session reset', 'normal');
+        addLog('nodejs', 'Session reset');
         break;
     }
   }, [addLog, updateStatus]);
@@ -589,6 +611,19 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     addLog('nodejs', `Playing track ${index + 1} from queue`);
   }, [addLog, ensureWebAudioInitialized]);
 
+  // Volume control (browser-only, not sent to server)
+  const setVolume = useCallback((value: number) => {
+    const clampedValue = Math.max(0, Math.min(1, value));
+    setVolumeState(clampedValue);
+    audioPlayerRef.current.player?.setVolume(clampedValue);
+  }, []);
+
+  // Reset session completely (clears queue, stops playback, deletes from DB)
+  const resetSession = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ action: 'resetSession' }));
+    addLog('nodejs', 'Reset session requested');
+  }, [addLog]);
+
   return {
     isConnected,
     debugMode,
@@ -604,6 +639,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     currentIndex,
     nowPlaying,
     user,
+    volume,
     play,
     stop,
     pause,
@@ -615,5 +651,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     skip,
     previous,
     clearQueue,
+    setVolume,
+    resetSession,
   };
 }

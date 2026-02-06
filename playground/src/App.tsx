@@ -20,6 +20,9 @@ import {
   X,
   Youtube,
   Trash2,
+  Volume2,
+  VolumeX,
+  RotateCcw,
 } from 'lucide-react';
 
 function PlayerApp() {
@@ -40,6 +43,7 @@ function PlayerApp() {
     queue,
     currentIndex,
     nowPlaying,
+    volume,
     play,
     stop,
     pause,
@@ -49,6 +53,8 @@ function PlayerApp() {
     skip,
     previous,
     clearQueue,
+    setVolume,
+    resetSession,
   } = useWebSocket({ onUnauthorized: forceLogout });
 
   // Handle error toast display
@@ -317,6 +323,27 @@ function PlayerApp() {
                 >
                   <Square size={24} fill="currentColor" />
                 </button>
+
+                {/* Volume Control */}
+                <div className="flex items-center gap-2 ml-4 pl-4 border-l border-slate-700">
+                  <button
+                    onClick={() => setVolume(volume > 0 ? 0 : 1)}
+                    className="p-1 text-slate-400 hover:text-white transition-colors"
+                    title={volume > 0 ? 'Mute' : 'Unmute'}
+                  >
+                    {volume > 0 ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  </button>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={volume}
+                    onChange={(e) => setVolume(parseFloat(e.target.value))}
+                    className="w-20 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-indigo-500 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-md"
+                    title={`Volume: ${Math.round(volume * 100)}%`}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -342,6 +369,13 @@ function PlayerApp() {
                     <Trash2 size={14} />
                   </button>
                 )}
+                <button
+                  onClick={resetSession}
+                  className="p-1.5 text-slate-500 hover:text-orange-400 hover:bg-orange-500/10 rounded-md transition-all"
+                  title="Reset Session (clear all and start fresh)"
+                >
+                  <RotateCcw size={14} />
+                </button>
               </div>
             </div>
 

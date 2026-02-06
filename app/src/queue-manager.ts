@@ -138,5 +138,6 @@ export class QueueManager extends EventEmitter {
 
   private emitUpdate(): void {
     this.emit('update', this.getState());
+    this.emit('persist'); // Trigger persistence
   }
 }
