@@ -115,6 +115,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     return saved !== null ? parseFloat(saved) : 1.0;
   });
   const volumeSaveTimerRef = useRef<number | null>(null);
+  const volumeRef = useRef(volume);
   const audioStartedRef = useRef(false);
 
   const getWebSocketUrl = useCallback(() => {
@@ -171,6 +172,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     try {
       audioProgressOffsetRef.current = playbackTimeRef.current;
       await audioPlayer.init();
+      // Apply saved volume after init
+      audioPlayer.setVolume(volumeRef.current);
       addLog('nodejs', 'Audio player initialized (web mode)');
       return true;
     } catch (err) {
@@ -621,6 +624,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const setVolume = useCallback((value: number) => {
     const clampedValue = Math.max(0, Math.min(1, value));
     setVolumeState(clampedValue);
+    volumeRef.current = clampedValue;
     audioPlayerRef.current.player?.setVolume(clampedValue);
 
     // Debounced save to localStorage
