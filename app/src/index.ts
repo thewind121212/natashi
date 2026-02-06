@@ -62,11 +62,6 @@ async function startDiscordBot(): Promise<void> {
     return;
   }
 
-  if (!config.guildId) {
-    console.log('[Discord] GUILD_ID not set, skipping Discord bot');
-    return;
-  }
-
   discordClient = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -80,12 +75,13 @@ async function startDiscordBot(): Promise<void> {
     const rest = new REST().setToken(config.botToken);
     const commandData = commands.map((cmd) => cmd.data.toJSON());
 
-    console.log(`[Discord] Registering ${commandData.length} commands...`);
+    // Register commands globally (works on all servers, takes ~1 hour to propagate)
+    console.log(`[Discord] Registering ${commandData.length} global commands...`);
     await rest.put(
-      Routes.applicationGuildCommands(readyClient.user.id, config.guildId),
+      Routes.applicationCommands(readyClient.user.id),
       { body: commandData }
     );
-    console.log('[Discord] Commands registered');
+    console.log('[Discord] Global commands registered (may take up to 1 hour to appear on new servers)');
     console.log('[Discord] Bot ready!');
   });
 
