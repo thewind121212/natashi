@@ -334,3 +334,88 @@ func extractYouTubeID(value string) string {
 	}
 	return ""
 }
+
+// SearchResult represents a single search result.
+type SearchResult struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Duration  int    `json:"duration"`
+	Thumbnail string `json:"thumbnail"`
+	Channel   string `json:"channel"`
+}
+
+// Search searches YouTube for videos matching the query.
+func (e *Extractor) Search(query string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+
+	searchQuery := fmt.Sprintf("ytsearch%d:%s", limit, query)
+
+	args := []string{
+		"--ignore-config",
+		"--flat-playlist",
+		"--no-warnings",
+		"--no-check-certificate",
+		"--socket-timeout", "10",
+		"-j",
+	}
+
+	args = append(args, getJsRuntimeArgs()...)
+	args = append(args, getCookieArgs()...)
+	args = append(args, searchQuery)
+
+	cmd := exec.Command("yt-dlp", args...)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("yt-dlp search failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	results := make([]SearchResult, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			ID        string `json:"id"`
+			Title     string `json:"title"`
+			Duration  int    `json:"duration"`
+			Thumbnail string `json:"thumbnail"`
+			Channel   string `json:"channel"`
+			Uploader  string `json:"uploader"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+
+		url := "https://www.youtube.com/watch?v=" + entry.ID
+
+		thumbnail := entry.Thumbnail
+		if thumbnail == "" && entry.ID != "" {
+			thumbnail = "https://i.ytimg.com/vi/" + entry.ID + "/mqdefault.jpg"
+		}
+
+		channel := entry.Channel
+		if channel == "" {
+			channel = entry.Uploader
+		}
+
+		results = append(results, SearchResult{
+			ID:        entry.ID,
+			URL:       url,
+			Title:     entry.Title,
+			Duration:  entry.Duration,
+			Thumbnail: thumbnail,
+			Channel:   channel,
+		})
+	}
+
+	return results, nil
+}

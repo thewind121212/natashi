@@ -1,4 +1,4 @@
-// /stop command - stops playback, clears queue, and disconnects
+// /resume command - resume paused playback
 
 import {
   SlashCommandBuilder,
@@ -7,15 +7,13 @@ import {
 } from 'discord.js';
 import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
-import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
 
 const apiClient = new ApiClient();
-const socketClient = SocketClient.getSharedInstance();
 
 export const data = new SlashCommandBuilder()
-  .setName('stop')
-  .setDescription('Stop playback, clear queue, and disconnect');
+  .setName('resume')
+  .setDescription('Resume paused playback');
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
@@ -28,32 +26,40 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  if (!voiceManager.isConnected(guildId)) {
+  const session = discordSessions.get(guildId);
+
+  if (!session || !voiceManager.isConnected(guildId) || !session.currentTrack) {
     await interaction.reply({
-      content: 'Not currently playing anything.',
+      content: 'Nothing is playing right now.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (!session.isPaused) {
+    await interaction.reply({
+      content: 'Playback is not paused.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   try {
-    // Clean up audio stream
-    socketClient.endAudioStreamForSession(guildId);
-    await apiClient.stop(guildId);
+    // Resume Go server first (starts audio generation)
+    await apiClient.resume(guildId);
+    session.isPaused = false;
 
-    // Clear session state
-    discordSessions.reset(guildId);
-
-    // Leave voice channel
-    voiceManager.leave(guildId);
+    // Then unpause Discord player
+    voiceManager.unpause(guildId);
 
     await interaction.reply({
-      content: 'Stopped playback and cleared the queue.',
+      content: `Resumed: **${session.currentTrack.title}**`,
     });
   } catch (error) {
-    console.error('[Stop] Error:', error);
+    console.error('[Resume] Error:', error);
     await interaction.reply({
       content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }

@@ -68,6 +68,24 @@ type PlaylistResponse struct {
 	Error   string          `json:"error,omitempty"`
 }
 
+// SearchResult represents a single search result.
+type SearchResult struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Duration  int    `json:"duration"`
+	Thumbnail string `json:"thumbnail"`
+	Channel   string `json:"channel"`
+}
+
+// SearchResponse is the response for search endpoint.
+type SearchResponse struct {
+	Query   string         `json:"query"`
+	Count   int            `json:"count"`
+	Results []SearchResult `json:"results"`
+	Error   string         `json:"error,omitempty"`
+}
+
 // Play starts a new playback session.
 func (a *API) Play(c *gin.Context) {
 	sessionID := c.Param("id")
@@ -314,5 +332,48 @@ func (a *API) Playlist(c *gin.Context) {
 		URL:     url,
 		Count:   len(apiEntries),
 		Entries: apiEntries,
+	})
+}
+
+// Search searches YouTube for videos matching the query.
+func (a *API) Search(c *gin.Context) {
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusBadRequest, SearchResponse{
+			Error: "q query parameter is required",
+		})
+		return
+	}
+
+	fmt.Printf("[API] Search request: q=%s\n", query)
+
+	extractor := youtube.New()
+
+	results, err := extractor.Search(query, 5)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, SearchResponse{
+			Query: query,
+			Error: fmt.Sprintf("search failed: %v", err),
+		})
+		return
+	}
+
+	// Convert to API response type
+	apiResults := make([]SearchResult, len(results))
+	for i, r := range results {
+		apiResults[i] = SearchResult{
+			ID:        r.ID,
+			URL:       r.URL,
+			Title:     r.Title,
+			Duration:  r.Duration,
+			Thumbnail: r.Thumbnail,
+			Channel:   r.Channel,
+		}
+	}
+
+	c.JSON(http.StatusOK, SearchResponse{
+		Query:   query,
+		Count:   len(apiResults),
+		Results: apiResults,
 	})
 }

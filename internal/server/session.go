@@ -190,6 +190,7 @@ func (m *SessionManager) runPlayback(session *Session) {
 
 	// Create encoding pipeline
 	pipeline := encoder.NewDefaultPipeline()
+	pipeline.SetSessionID(session.ID)
 	session.mu.Lock()
 	session.Pipeline = pipeline
 	session.mu.Unlock()

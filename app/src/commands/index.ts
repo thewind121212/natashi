@@ -2,5 +2,22 @@
 
 import * as play from './play';
 import * as stop from './stop';
+import * as pause from './pause';
+import * as resume from './resume';
+import * as skip from './skip';
+import * as queue from './queue';
+import * as nowplaying from './nowplaying';
+import * as previous from './previous';
+import * as status from './status';
 
-export const commands = [play, stop];
+export const commands = [
+  play,
+  stop,
+  pause,
+  resume,
+  skip,
+  queue,
+  nowplaying,
+  previous,
+  status,
+];

@@ -16,6 +16,7 @@ type FFmpegPipeline struct {
 	output         chan []byte
 	cancel         context.CancelFunc
 	readBufferSize int
+	sessionID      string // For logging which session this pipeline belongs to
 }
 
 // NewFFmpegPipeline creates a new FFmpeg-based encoding pipeline.
@@ -30,6 +31,18 @@ func NewFFmpegPipeline(config Config) *FFmpegPipeline {
 // NewDefaultPipeline creates a pipeline with default configuration.
 func NewDefaultPipeline() *FFmpegPipeline {
 	return NewFFmpegPipeline(DefaultConfig())
+}
+
+// SetSessionID sets the session ID for logging purposes.
+func (p *FFmpegPipeline) SetSessionID(id string) {
+	p.sessionID = id
+}
+
+func (p *FFmpegPipeline) shortSessionID() string {
+	if len(p.sessionID) <= 8 {
+		return p.sessionID
+	}
+	return p.sessionID[:8]
 }
 
 // Start begins the encoding pipeline.
@@ -207,10 +220,12 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	totalBytes := 0
 	chunkCount := 0
 
+	fmt.Printf("[FFmpeg] [%s] Starting to read output (buffer: %d bytes)\n", p.shortSessionID(), p.readBufferSize)
+
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("[FFmpeg] Stopped, total: %d bytes\n", totalBytes)
+			fmt.Printf("[FFmpeg] [%s] Stopped, total: %d bytes\n", p.shortSessionID(), totalBytes)
 			return
 		default:
 			n, err := p.stdout.Read(buf)
@@ -226,8 +241,13 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 				copy(chunk, buf[:n])
 				totalBytes += n
 				chunkCount++
-				if chunkCount%500 == 1 {
-					fmt.Printf("[FFmpeg] Progress: %d KB\n", totalBytes/1024)
+				// Log every 100 chunks (~2 seconds of audio)
+				if chunkCount%100 == 1 {
+					if totalBytes < 1024 {
+						fmt.Printf("[FFmpeg] [%s] Progress: %d bytes (%d chunks)\n", p.shortSessionID(), totalBytes, chunkCount)
+					} else {
+						fmt.Printf("[FFmpeg] [%s] Progress: %d KB (%d chunks)\n", p.shortSessionID(), totalBytes/1024, chunkCount)
+					}
 				}
 				select {
 				case p.output <- chunk:

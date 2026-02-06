@@ -116,6 +116,30 @@ class VoiceManager {
       console.log(`[VoiceManager] Stopped playback in guild ${guildId}`);
     }
   }
+
+  pause(guildId: string): boolean {
+    const state = this.guilds.get(guildId);
+    if (state) {
+      const success = state.player.pause();
+      if (success) {
+        console.log(`[VoiceManager] Paused playback in guild ${guildId}`);
+      }
+      return success;
+    }
+    return false;
+  }
+
+  unpause(guildId: string): boolean {
+    const state = this.guilds.get(guildId);
+    if (state) {
+      const success = state.player.unpause();
+      if (success) {
+        console.log(`[VoiceManager] Resumed playback in guild ${guildId}`);
+      }
+      return success;
+    }
+    return false;
+  }
 }
 
 export const voiceManager = new VoiceManager();

@@ -4,12 +4,19 @@ import { WebSocketHandler } from './websocket';
 import { SqliteStore } from './sqlite-store';
 import { createServer as createHttpServer } from 'http';
 import { config } from './config';
+
+// Suppress @discordjs/voice negative timeout warnings (not a real error, just timing jitter)
+process.on('warning', (warning) => {
+  if (warning.name === 'TimeoutNegativeWarning') return;
+  console.warn(warning);
+});
 import {
   Client,
   GatewayIntentBits,
   REST,
   Routes,
   Events,
+  MessageFlags,
 } from 'discord.js';
 import { commands } from './commands';
 
@@ -83,6 +90,20 @@ async function startDiscordBot(): Promise<void> {
   });
 
   discordClient.on(Events.InteractionCreate, async (interaction) => {
+    // Handle autocomplete interactions
+    if (interaction.isAutocomplete()) {
+      const command = commands.find((cmd) => cmd.data.name === interaction.commandName);
+      if (!command || !('autocomplete' in command)) return;
+
+      try {
+        await (command as { autocomplete: (i: typeof interaction) => Promise<void> }).autocomplete(interaction);
+      } catch (error) {
+        console.error(`[Discord] Autocomplete error for ${interaction.commandName}:`, error);
+      }
+      return;
+    }
+
+    // Handle slash command interactions
     if (!interaction.isChatInputCommand()) return;
 
     const command = commands.find((cmd) => cmd.data.name === interaction.commandName);

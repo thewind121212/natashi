@@ -28,6 +28,9 @@ func SetupRouter(api *API) *gin.Engine {
 	// Playlist endpoint (extract all videos from playlist)
 	r.GET("/playlist", api.Playlist)
 
+	// Search endpoint (YouTube search)
+	r.GET("/search", api.Search)
+
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
