@@ -109,7 +109,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
   const [user, setUser] = useState<User | null>(null);
-  const [volume, setVolumeState] = useState(1.0);
+  // Load volume from localStorage (default 1.0)
+  const [volume, setVolumeState] = useState(() => {
+    const saved = localStorage.getItem('player-volume');
+    return saved !== null ? parseFloat(saved) : 1.0;
+  });
+  const volumeSaveTimerRef = useRef<number | null>(null);
   const audioStartedRef = useRef(false);
 
   const getWebSocketUrl = useCallback(() => {
@@ -612,10 +617,19 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   }, [addLog, ensureWebAudioInitialized]);
 
   // Volume control (browser-only, not sent to server)
+  // Saves to localStorage with 300ms debounce
   const setVolume = useCallback((value: number) => {
     const clampedValue = Math.max(0, Math.min(1, value));
     setVolumeState(clampedValue);
     audioPlayerRef.current.player?.setVolume(clampedValue);
+
+    // Debounced save to localStorage
+    if (volumeSaveTimerRef.current) {
+      clearTimeout(volumeSaveTimerRef.current);
+    }
+    volumeSaveTimerRef.current = window.setTimeout(() => {
+      localStorage.setItem('player-volume', clampedValue.toString());
+    }, 300);
   }, []);
 
   // Reset session completely (clears queue, stops playback, deletes from DB)
