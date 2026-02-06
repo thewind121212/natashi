@@ -94,9 +94,20 @@ export class WebSocketHandler {
 
       ws.on('message', (data) => this.handleBrowserMessage(ws, data, session));
 
-      ws.on('close', () => {
+      ws.on('close', async () => {
         console.log(`[WebSocket] User ${user.username} disconnected`);
         this.clients.delete(ws);
+
+        // Auto-pause Go to save resources when browser disconnects
+        if (session.currentSessionId && !session.isPaused) {
+          try {
+            await this.apiClient.pause(session.currentSessionId);
+            session.isPaused = true;
+            console.log(`[WebSocket] Auto-paused session ${session.currentSessionId} due to disconnect`);
+          } catch (err) {
+            console.error(`[WebSocket] Failed to auto-pause:`, err);
+          }
+        }
         // Don't cleanup session - user might reconnect
       });
 

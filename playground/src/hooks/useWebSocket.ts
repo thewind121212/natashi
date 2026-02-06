@@ -67,6 +67,7 @@ interface UseWebSocketReturn {
   clearQueue: () => void;
   setVolume: (value: number) => void;
   resetSession: () => void;
+  seek: (seconds: number) => void;
 }
 
 export type { Track };
@@ -642,6 +643,26 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     addLog('nodejs', 'Reset session requested');
   }, [addLog]);
 
+  // Seek to a specific time position (seconds)
+  const seek = useCallback((seconds: number) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!nowPlaying) return;
+
+    // Clamp to valid range
+    const clamped = Math.max(0, Math.min(seconds, nowPlaying.duration));
+
+    // Reset audio player and prepare for new position
+    resumeFromRequestedRef.current = clamped;
+    setPlaybackTime(clamped);
+    audioProgressOffsetRef.current = clamped;
+    lastTickRef.current = Date.now();
+    audioPlayerRef.current.player?.reset();
+    audioStartedRef.current = false;
+
+    wsRef.current.send(JSON.stringify({ action: 'resumeFrom', seconds: clamped }));
+    addLog('nodejs', `Seeking to ${Math.floor(clamped / 60)}:${String(Math.floor(clamped % 60)).padStart(2, '0')}`);
+  }, [nowPlaying, addLog]);
+
   return {
     isConnected,
     debugMode,
@@ -671,5 +692,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     clearQueue,
     setVolume,
     resetSession,
+    seek,
   };
 }

@@ -28,7 +28,10 @@ import {
 function PlayerApp() {
   const [urlInput, setUrlInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragTime, setDragTime] = useState(0);
   const toastTimeoutRef = useRef<number | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
   const { forceLogout } = useAuth();
 
   const {
@@ -55,6 +58,7 @@ function PlayerApp() {
     clearQueue,
     setVolume,
     resetSession,
+    seek,
   } = useWebSocket({ onUnauthorized: forceLogout });
 
   // Handle error toast display
@@ -128,19 +132,89 @@ function PlayerApp() {
     return url.replace(/\/(mq|hq|sd)default\.jpg$/, '/maxresdefault.jpg');
   };
 
+  // Progress bar seek handlers
+  const dragTimeRef = useRef(0);
+
+  const getSeekTimeFromPosition = (clientX: number): number => {
+    if (!progressBarRef.current || !nowPlaying) return 0;
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const clickX = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const percentage = clickX / rect.width;
+    return percentage * nowPlaying.duration;
+  };
+
+  const handleProgressMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!nowPlaying || isLoading) return;
+    e.preventDefault();
+    const time = getSeekTimeFromPosition(e.clientX);
+    setIsDragging(true);
+    setDragTime(time);
+    dragTimeRef.current = time;
+  };
+
+  const handleProgressTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!nowPlaying || isLoading) return;
+    const time = getSeekTimeFromPosition(e.touches[0].clientX);
+    setIsDragging(true);
+    setDragTime(time);
+    dragTimeRef.current = time;
+  };
+
+  // Handle drag/touch move and end
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMove = (e: MouseEvent | TouchEvent) => {
+      if (!progressBarRef.current || !nowPlaying) return;
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const clickX = Math.max(0, Math.min(clientX - rect.left, rect.width));
+      const percentage = clickX / rect.width;
+      const time = percentage * nowPlaying.duration;
+      setDragTime(time);
+      dragTimeRef.current = time;
+    };
+
+    const handleEnd = () => {
+      setIsDragging(false);
+      seek(dragTimeRef.current);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove);
+    window.addEventListener('touchend', handleEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+    };
+  }, [isDragging, nowPlaying, seek]);
+
+  // Display time: show drag position during drag, otherwise playback time
+  const displayTime = isDragging ? dragTime : playbackTime;
+  const displayProgress = nowPlaying ? (displayTime / nowPlaying.duration) * 100 : 0;
+
   // Progress bar markup (inline to access component state)
   const progressBarElement = (
     <div className={`w-full group ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
       <div className="flex justify-between text-xs text-gray-400 mb-2 font-mono">
-        <span>{formatTime(playbackTime)}</span>
+        <span>{formatTime(displayTime)}</span>
         <span>{nowPlaying ? formatTime(nowPlaying.duration) : '0:00'}</span>
       </div>
-      <div className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden">
+      <div
+        ref={progressBarRef}
+        className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden cursor-pointer select-none"
+        onMouseDown={handleProgressMouseDown}
+        onTouchStart={handleProgressTouchStart}
+      >
         <div
-          className="h-full bg-indigo-500 transition-all duration-100 ease-linear relative"
-          style={{ width: `${progress}%` }}
+          className={`h-full bg-indigo-500 relative ${isDragging ? '' : 'transition-all duration-100 ease-linear'}`}
+          style={{ width: `${displayProgress}%` }}
         >
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity" />
+          <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow transition-opacity ${isDragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} />
         </div>
       </div>
     </div>
