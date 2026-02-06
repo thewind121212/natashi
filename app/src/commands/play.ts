@@ -82,8 +82,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const voiceChannel = member.voice.channel;
     voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
 
-    // Create per-guild audio stream (demuxed by guildId)
-    const audioStream = socketClient.createAudioStreamForSession(guildId);
+    // Create direct pass-through stream for Discord (no jitter buffer)
+    // Ogg/Opus containers handle their own framing, so we don't re-chunk
+    const audioStream = socketClient.createDirectStreamForSession(guildId);
     voiceManager.playStream(guildId, audioStream);
 
     // Tell Go to start playback (format: opus for Discord)

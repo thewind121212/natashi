@@ -95,10 +95,10 @@ export interface Event {
 
 // SocketClient handles Unix socket connection for receiving audio data.
 // Control commands are now handled via HTTP API (see api-client.ts).
-// Session-specific audio stream with its own jitter buffer
+// Session-specific audio stream with optional jitter buffer
 interface SessionStream {
   stream: PassThrough;
-  jitterBuffer: JitterBuffer;
+  jitterBuffer: JitterBuffer | null;  // null for direct pass-through (Ogg/Opus containers)
 }
 
 export class SocketClient extends EventEmitter {
@@ -256,7 +256,13 @@ export class SocketClient extends EventEmitter {
   private routeAudioToSession(sessionId: string, data: Buffer): void {
     const session = this.sessionStreams.get(sessionId);
     if (session) {
-      session.jitterBuffer.push(data);
+      if (session.jitterBuffer) {
+        // Use jitter buffer for PCM/raw frame streams
+        session.jitterBuffer.push(data);
+      } else {
+        // Direct pass-through for container formats (Ogg/Opus)
+        session.stream.push(data);
+      }
     }
   }
 
@@ -282,11 +288,31 @@ export class SocketClient extends EventEmitter {
     return stream;
   }
 
+  // Create a direct PassThrough stream (no jitter buffer) for container formats like Ogg/Opus.
+  // Use this for Discord playback where the Ogg container handles its own framing.
+  createDirectStreamForSession(sessionId: string): PassThrough {
+    // End previous stream for this session if exists
+    this.endAudioStreamForSession(sessionId);
+
+    const stream = new PassThrough();
+
+    this.sessionStreams.set(sessionId, { stream, jitterBuffer: null });
+
+    // Clean up when stream is destroyed
+    stream.on('close', () => {
+      this.sessionStreams.delete(sessionId);
+    });
+
+    return stream;
+  }
+
   // End audio stream for a specific session
   endAudioStreamForSession(sessionId: string): void {
     const session = this.sessionStreams.get(sessionId);
     if (session) {
-      session.jitterBuffer.stop();
+      if (session.jitterBuffer) {
+        session.jitterBuffer.stop();
+      }
       session.stream.end();
       this.sessionStreams.delete(sessionId);
     }
@@ -294,8 +320,10 @@ export class SocketClient extends EventEmitter {
 
   // End all audio streams (cleanup)
   endAllAudioStreams(): void {
-    for (const [sessionId, session] of this.sessionStreams) {
-      session.jitterBuffer.stop();
+    for (const [, session] of this.sessionStreams) {
+      if (session.jitterBuffer) {
+        session.jitterBuffer.stop();
+      }
       session.stream.end();
     }
     this.sessionStreams.clear();

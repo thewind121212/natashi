@@ -165,6 +165,8 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec f
 		)
 	case FormatOpus:
 		// Opus encoded for Discord - 128kbps for voice channels
+		// Prepend -re to read input at native frame rate (prevents buffer overflow on long videos)
+		args = append([]string{"-re"}, args...)
 		args = append(args,
 			"-c:a", "libopus",
 			"-b:a", "128000", // 128kbps for Discord
