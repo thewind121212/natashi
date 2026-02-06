@@ -23,12 +23,6 @@ interface YouTubeSearchItem {
   length?: { simpleText: string };
 }
 
-interface YouTubeVideoDetails {
-  title?: string;
-  length?: { simpleText: string };
-  thumbnail?: { thumbnails?: Array<{ url: string }> };
-}
-
 interface FastMetadata {
   title: string;
   duration: number;
@@ -70,15 +64,34 @@ async function getFastMetadata(url: string): Promise<FastMetadata | null> {
   if (!videoId) return null;
 
   try {
-    const details = await YouTubeSearch.GetVideoDetails(videoId) as YouTubeVideoDetails;
-    if (!details) return null;
+    // Search by video ID to get metadata including duration
+    const searchResults = await YouTubeSearch.GetListByKeyword(videoId, false, 5);
+    const items = searchResults?.items as YouTubeSearchItem[] | undefined;
 
-    return {
-      title: details.title || 'Unknown',
-      duration: parseDuration(details.length?.simpleText || ''),
-      thumbnail: details.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-    };
+    // Find the exact video match
+    const video = items?.find((item) => item.type === 'video' && item.id === videoId);
+
+    if (video) {
+      return {
+        title: video.title || 'Unknown',
+        duration: parseDuration(video.length?.simpleText || ''),
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+      };
+    }
+
+    // Fallback: use first video result if exact match not found
+    const firstVideo = items?.find((item) => item.type === 'video');
+    if (firstVideo) {
+      return {
+        title: firstVideo.title || 'Unknown',
+        duration: parseDuration(firstVideo.length?.simpleText || ''),
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+      };
+    }
+
+    return null;
   } catch {
     // Fallback to basic thumbnail
     return {
