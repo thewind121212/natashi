@@ -87,11 +87,6 @@ function PlayerApp() {
   // Determine loading state from status
   const isLoading = status === 'Extracting...' || status === 'Starting...' || status === 'Loading playlist...';
 
-  // Calculate progress percentage
-  const progress = nowPlaying && nowPlaying.duration > 0
-    ? Math.min((playbackTime / nowPlaying.duration) * 100, 100)
-    : 0;
-
   const handleUrlSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!urlInput.trim()) return;
