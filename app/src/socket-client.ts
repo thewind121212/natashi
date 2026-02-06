@@ -280,7 +280,9 @@ export class SocketClient extends EventEmitter {
     stream.on('close', () => {
       const session = this.sessionStreams.get(sessionId);
       if (session) {
-        session.jitterBuffer.stop();
+        if (session.jitterBuffer) {
+          session.jitterBuffer.stop();
+        }
         this.sessionStreams.delete(sessionId);
       }
     });
