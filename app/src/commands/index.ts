@@ -11,6 +11,7 @@ import * as nowplaying from './nowplaying';
 import * as previous from './previous';
 import * as seek from './seek';
 import * as status from './status';
+import * as help from './help';
 
 export const commands = [
   play,
@@ -24,4 +25,5 @@ export const commands = [
   previous,
   seek,
   status,
+  help,
 ];
