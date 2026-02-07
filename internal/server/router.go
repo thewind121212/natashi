@@ -1,8 +1,14 @@
 package server
 
 import (
+	"fmt"
+	"runtime"
+	"time"
+
 	"github.com/gin-gonic/gin"
 )
+
+var serverStartTime = time.Now()
 
 // SetupRouter creates and configures the Gin router.
 func SetupRouter(api *API) *gin.Engine {
@@ -31,9 +37,25 @@ func SetupRouter(api *API) *gin.Engine {
 	// Search endpoint (YouTube search)
 	r.GET("/search", api.Search)
 
-	// Health check
+	// Health check with system stats
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+
+		uptimeSeconds := int64(time.Since(serverStartTime).Seconds())
+		ramMB := float64(memStats.Alloc) / 1024 / 1024
+
+		c.JSON(200, gin.H{
+			"status":             "ok",
+			"uptime_seconds":     uptimeSeconds,
+			"ram_mb":             fmt.Sprintf("%.2f", ramMB),
+			"goroutines":        runtime.NumGoroutine(),
+			"sessions_active":   api.sessions.ActiveSessionCount(),
+			"sessions_playing":  api.sessions.StreamingSessionCount(),
+			"go_version":        runtime.Version(),
+			"os":                runtime.GOOS,
+			"arch":              runtime.GOARCH,
+		})
 	})
 
 	return r

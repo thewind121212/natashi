@@ -61,6 +61,18 @@ export interface SearchResponse {
   error?: string;
 }
 
+export interface HealthResponse {
+  status: string;
+  uptime_seconds: number;
+  ram_mb: string;
+  goroutines: number;
+  sessions_active: number;
+  sessions_playing: number;
+  go_version: string;
+  os: string;
+  arch: string;
+}
+
 export class ApiClient {
   private baseUrl: string;
 
@@ -105,9 +117,9 @@ export class ApiClient {
     return response.json() as Promise<StatusResponse>;
   }
 
-  async health(): Promise<{ status: string }> {
+  async health(): Promise<HealthResponse> {
     const response = await fetch(`${this.baseUrl}/health`);
-    return response.json() as Promise<{ status: string }>;
+    return response.json() as Promise<HealthResponse>;
   }
 
   async getMetadata(url: string): Promise<MetadataResponse> {

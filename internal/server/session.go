@@ -330,6 +330,26 @@ func (m *SessionManager) sendEvent(sessionID string, eventType string, message s
 	conn.Write([]byte(event))
 }
 
+// ActiveSessionCount returns the number of active sessions.
+func (m *SessionManager) ActiveSessionCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.sessions)
+}
+
+// StreamingSessionCount returns the number of sessions currently streaming.
+func (m *SessionManager) StreamingSessionCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	count := 0
+	for _, s := range m.sessions {
+		if s.GetState() == StateStreaming {
+			count++
+		}
+	}
+	return count
+}
+
 // Get returns a session by ID.
 func (m *SessionManager) Get(id string) *Session {
 	m.mu.RLock()

@@ -18,10 +18,6 @@ interface SearchResult {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
-function isUrl(input: string): boolean {
-  return /^https?:\/\//i.test(input) || /youtu\.?be/i.test(input);
-}
-
 // --- Helpers ---
 
 const formatTime = (seconds: number): string => {
@@ -115,7 +111,7 @@ export function GuildCard({ guild }: GuildCardProps) {
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [queueExpanded, setQueueExpanded] = useState(true);
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [localPlaybackTime, setLocalPlaybackTime] = useState(0);
