@@ -27,7 +27,7 @@ async function startExpressServer(): Promise<void> {
   const sqliteStore = new SqliteStore();
   sqliteStore.init();
 
-  const app = createServer();
+  const app = createServer(() => discordClient);
   const httpServer = createHttpServer(app);
   const wsHandler = new WebSocketHandler(httpServer, sqliteStore);
 

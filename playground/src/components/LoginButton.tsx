@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { LogOut, ChevronDown } from 'lucide-react';
 
-export function LoginButton() {
+export function LoginButton({ dropUp = false }: { dropUp?: boolean } = {}) {
   const { user, isAuthenticated, login, logout } = useAuth();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -34,7 +34,7 @@ export function LoginButton() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors"
+        className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors w-full"
       >
         {user?.avatar ? (
           <img
@@ -54,7 +54,7 @@ export function LoginButton() {
       </button>
 
       {isDropdownOpen && (
-        <div className="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className={`absolute w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden ${dropUp ? 'bottom-full mb-2 left-0' : 'right-0 mt-2'}`}>
           <div className="px-4 py-3 border-b border-slate-700">
             <p className="text-sm font-medium text-white truncate">{user?.username}</p>
             <p className="text-xs text-slate-400 truncate">ID: {user?.id}</p>

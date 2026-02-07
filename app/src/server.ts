@@ -3,14 +3,16 @@ import cors from 'cors';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import cookieParser from 'cookie-parser';
+import { Client } from 'discord.js';
 import { ApiClient } from './api-client';
 import { discordOAuth } from './auth/discord-oauth';
 import { signToken, verifyToken } from './auth/jwt';
 import { config } from './config';
+import { createBotRouter } from './bot/bot-router';
 
 const PORT = 3000;
 
-export function createServer(): Express {
+export function createServer(getDiscordClient: () => Client | null): Express {
   const app = express();
   const apiClient = new ApiClient();
 
@@ -209,6 +211,9 @@ export function createServer(): Express {
       res.status(503).json({ status: 'error', message: 'Go API unavailable' });
     }
   });
+
+  // === Bot Controller API ===
+  app.use('/api/bot', createBotRouter(getDiscordClient));
 
   return app;
 }

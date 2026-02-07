@@ -13,6 +13,8 @@ export interface GuildSession {
   playRequestId: number;
   activePlayRequestId: number;
   suppressAutoAdvanceFor: Set<string>; // Session IDs to skip auto-advance for
+  playbackStartAt: number | null; // Date.now() when playback started (for progress tracking)
+  seekOffset: number; // seconds offset from seek (for progress tracking)
 }
 
 export class DiscordSessionStore {
@@ -31,6 +33,8 @@ export class DiscordSessionStore {
         playRequestId: 0,
         activePlayRequestId: 0,
         suppressAutoAdvanceFor: new Set(),
+        playbackStartAt: null,
+        seekOffset: 0,
       };
       this.sessions.set(guildId, session);
     }
@@ -51,6 +55,8 @@ export class DiscordSessionStore {
       session.playRequestId = 0;
       session.activePlayRequestId = 0;
       session.suppressAutoAdvanceFor.clear();
+      session.playbackStartAt = null;
+      session.seekOffset = 0;
     }
   }
 
@@ -60,6 +66,10 @@ export class DiscordSessionStore {
 
   getActiveCount(): number {
     return this.sessions.size;
+  }
+
+  getAllSessions(): Map<string, GuildSession> {
+    return this.sessions;
   }
 }
 

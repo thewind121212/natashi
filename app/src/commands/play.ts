@@ -254,6 +254,10 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
       return;
     }
 
+    // Track playback start time for bot controller progress bar
+    session.playbackStartAt = Date.now();
+    session.seekOffset = 0;
+
     console.log(`[Play] Now playing: ${track.title}`);
 
     // Send "Now Playing" message to channel (for auto-advance)
