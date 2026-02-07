@@ -389,7 +389,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
 
     // Check if it's a playlist URL (quick check)
-    const isPlaylistUrl = url.includes('list=') || url.includes('/playlist');
+    // Exclude YouTube Mix/Radio playlists (list=RD...) — they are auto-generated
+    // and can't be extracted by yt-dlp. Treat them as single videos instead.
+    const listMatch = url.match(/[?&]list=([^&]+)/);
+    const isPlaylistUrl = (url.includes('list=') || url.includes('/playlist'))
+      && !(listMatch && listMatch[1].startsWith('RD'));
 
     if (isPlaylistUrl) {
       // Handle playlist - need full metadata from Go
