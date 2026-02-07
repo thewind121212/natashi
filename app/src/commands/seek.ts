@@ -152,7 +152,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
 
     const embed = new EmbedBuilder()
-      .setColor(0x5865F2) // Blurple
+      .setColor(0xE67E22) // Orange
       .setTitle('Seeked')
       .setDescription(`**${track.title}**`)
       .setThumbnail(track.thumbnail || null)
