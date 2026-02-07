@@ -3,11 +3,21 @@
 // No Discord.js interaction objects - pure input/output
 
 import { Client, EmbedBuilder, TextChannel } from 'discord.js';
+import * as YouTubeSearch from 'youtube-search-api';
 import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 import { discordSessions, type GuildSession } from '../discord/session-store';
 import type { Track } from '../queue-manager';
+
+interface YouTubeSearchItem {
+  id: string;
+  type: string;
+  title: string;
+  channelTitle?: string;
+  length?: { simpleText: string };
+  thumbnail?: { thumbnails?: { url: string }[] };
+}
 
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
@@ -38,8 +48,8 @@ async function sendNowPlayingEmbed(session: GuildSession, track: Track): Promise
     const channel = await discordClient.channels.fetch(session.textChannelId);
     if (channel && channel.isTextBased()) {
       const embed = new EmbedBuilder()
-        .setColor(0x5865F2) // Blurple — from web controller
-        .setTitle('🎵 Now Playing')
+        .setColor(0x57F287) // Green
+        .setTitle('Now Playing')
         .setDescription(`**${track.title}**`)
         .setThumbnail(track.thumbnail || null)
         .addFields(
@@ -313,6 +323,13 @@ export async function botStop(guildId: string): Promise<BotActionResult> {
   }
 }
 
+function isPlaylistUrl(url: string): boolean {
+  const listMatch = url.match(/[?&]list=([^&]+)/);
+  // Exclude YouTube Mix/Radio playlists (list=RD...) — auto-generated, can't extract
+  return (url.includes('list=') || url.includes('/playlist'))
+    && !(listMatch && listMatch[1].startsWith('RD'));
+}
+
 export async function botPlay(guildId: string, url: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session) {
@@ -323,13 +340,40 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
   }
 
   try {
-    // Get metadata from Go API
+    const wasPlaying = session.currentTrack !== null;
+
+    if (isPlaylistUrl(url)) {
+      // Handle playlist — fetch all entries from Go API
+      const playlist = await apiClient.getPlaylist(url);
+      if (playlist.error) {
+        return { success: false, error: playlist.error };
+      }
+      if (!playlist.entries || playlist.entries.length === 0) {
+        return { success: false, error: 'Playlist is empty' };
+      }
+
+      for (const entry of playlist.entries) {
+        session.queueManager.addTrack(entry.url, entry.title, entry.duration, entry.thumbnail);
+      }
+
+      // If not already playing, start first added track
+      if (!wasPlaying) {
+        const firstTrack = session.queueManager.startPlaying(0);
+        if (firstTrack) {
+          const result = await startTrackOnGuild(guildId, session, firstTrack);
+          return { ...result, data: { ...result.data, count: playlist.count, playlist: true } };
+        }
+      }
+
+      return { success: true, data: { count: playlist.count, playlist: true, queued: wasPlaying } };
+    }
+
+    // Single track
     const metadata = await apiClient.getMetadata(url);
     if (metadata.error) {
       return { success: false, error: metadata.error };
     }
 
-    const wasPlaying = session.currentTrack !== null;
     session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
 
     if (!wasPlaying) {
@@ -389,13 +433,39 @@ export async function botClearQueue(guildId: string): Promise<BotActionResult> {
   }
 }
 
+function parseDuration(durationStr: string): number {
+  if (!durationStr) return 0;
+  const parts = durationStr.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
+}
+
 export async function botSearch(query: string): Promise<BotActionResult> {
   try {
-    const results = await apiClient.search(query);
-    if (results.error) {
-      return { success: false, error: results.error };
+    const searchResults = await YouTubeSearch.GetListByKeyword(query, false, 6);
+    if (!searchResults?.items?.length) {
+      return { success: true, data: { results: [], count: 0 } };
     }
-    return { success: true, data: { results: results.results, count: results.count } };
+
+    const results = (searchResults.items as YouTubeSearchItem[])
+      .filter((item) => item.type === 'video')
+      .slice(0, 6)
+      .map((item) => {
+        const thumbnail = item.thumbnail?.thumbnails?.length
+          ? item.thumbnail.thumbnails[item.thumbnail.thumbnails.length - 1].url
+          : `https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`;
+        return {
+          id: item.id,
+          url: `https://www.youtube.com/watch?v=${item.id}`,
+          title: item.title,
+          duration: parseDuration(item.length?.simpleText || ''),
+          thumbnail,
+          channel: item.channelTitle || '',
+        };
+      });
+
+    return { success: true, data: { results, count: results.length } };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
