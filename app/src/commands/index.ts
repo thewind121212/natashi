@@ -9,6 +9,7 @@ import * as jump from './jump';
 import * as queue from './queue';
 import * as nowplaying from './nowplaying';
 import * as previous from './previous';
+import * as seek from './seek';
 import * as status from './status';
 
 export const commands = [
@@ -21,5 +22,6 @@ export const commands = [
   queue,
   nowplaying,
   previous,
+  seek,
   status,
 ];
