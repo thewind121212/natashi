@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { createServer, startServer } from './server';
 import { WebSocketHandler } from './websocket';
+import { BotWebSocketHandler } from './bot/bot-ws';
 import { SqliteStore } from './sqlite-store';
 import { createServer as createHttpServer } from 'http';
 import { config } from './config';
@@ -29,7 +30,19 @@ async function startExpressServer(): Promise<void> {
 
   const app = createServer(() => discordClient);
   const httpServer = createHttpServer(app);
-  const wsHandler = new WebSocketHandler(httpServer, sqliteStore);
+  const wsHandler = new WebSocketHandler(sqliteStore);
+  const botWsHandler = new BotWebSocketHandler(() => discordClient);
+
+  // Route WebSocket upgrades by path
+  httpServer.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname;
+    if (pathname === '/ws/bot') {
+      botWsHandler.handleUpgrade(request, socket, head);
+    } else {
+      // Default: playground/web audio WebSocket (connects to ws://host:3000)
+      wsHandler.handleUpgrade(request, socket, head);
+    }
+  });
 
   const host = process.env.SERVER_HOST || '0.0.0.0';
   await new Promise<void>((resolve) => {

@@ -110,6 +110,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Stop current playback (suppress auto-advance since we're re-playing same track)
     session.suppressAutoAdvanceFor.add(guildId);
     suppressAutoAdvance = true;
+    voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
@@ -143,10 +144,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await readyPromise;
     console.log(`[Seek] Go is ready, creating stream for Discord`);
 
+    // Clear suppress flag after new track is ready (prevents leak to next natural finish)
+    session.suppressAutoAdvanceFor.delete(guildId);
+
     const audioStream = socketClient.createDirectStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);
     if (!success) {
-      session.suppressAutoAdvanceFor.delete(guildId);
       await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
       return;
     }

@@ -66,6 +66,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   try {
     // Stop current playback (suppress auto-advance since we already advanced)
     session.suppressAutoAdvanceFor.add(guildId);
+    voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
@@ -102,6 +103,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Wait for Go to be ready
     await readyPromise;
     console.log(`[Next] Go is ready, creating stream for Discord`);
+
+    // Clear suppress flag - by now any finished event for the old track has been
+    // processed (Go socket is in-order). If the old track already finished naturally
+    // before /next was called, Go won't send another finished event, so the flag
+    // would leak and block the NEXT track's auto-advance.
+    session.suppressAutoAdvanceFor.delete(guildId);
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);

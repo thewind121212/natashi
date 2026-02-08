@@ -96,6 +96,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   try {
     // Stop current playback (suppress auto-advance since we set the index manually)
     session.suppressAutoAdvanceFor.add(guildId);
+    voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
@@ -127,6 +128,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     await apiClient.play(guildId, track.url, 'opus');
     await readyPromise;
+
+    // Clear suppress flag after new track is ready (prevents leak to next natural finish)
+    session.suppressAutoAdvanceFor.delete(guildId);
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);

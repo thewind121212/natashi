@@ -2,8 +2,9 @@ import { Bot, Music } from 'lucide-react';
 import { useGuildList } from '@/hooks/useGuildList';
 import { GuildCard } from '@/components/GuildCard';
 import { AppHeader } from '@/components/AppHeader';
+import { BotWebSocketProvider } from '@/contexts/BotWebSocketContext';
 
-export default function BotController() {
+function BotControllerContent() {
   const { guilds, botConnected } = useGuildList();
 
   return (
@@ -32,5 +33,13 @@ export default function BotController() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function BotController() {
+  return (
+    <BotWebSocketProvider>
+      <BotControllerContent />
+    </BotWebSocketProvider>
   );
 }

@@ -1,4 +1,5 @@
-import { Server as HttpServer, IncomingMessage } from 'http';
+import { IncomingMessage } from 'http';
+import { Duplex } from 'stream';
 import { WebSocket, WebSocketServer, RawData } from 'ws';
 import { parse as parseCookie } from 'cookie';
 import { SocketClient, Event } from './socket-client';
@@ -27,8 +28,8 @@ export class WebSocketHandler {
 
   private static readonly TRANSITION_DEBOUNCE_MS = 150;
 
-  constructor(server: HttpServer, sqliteStore?: SqliteStore) {
-    this.wss = new WebSocketServer({ server });
+  constructor(sqliteStore?: SqliteStore) {
+    this.wss = new WebSocketServer({ noServer: true });
     // Use shared singleton - same connection as Discord bot
     this.socketClient = SocketClient.getSharedInstance();
     this.apiClient = new ApiClient();
@@ -686,6 +687,12 @@ export class WebSocketHandler {
       if (match) return match[1];
     }
     return null;
+  }
+
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.wss.handleUpgrade(request, socket, head, (ws) => {
+      this.wss.emit('connection', ws, request);
+    });
   }
 
   isConnected(): boolean {

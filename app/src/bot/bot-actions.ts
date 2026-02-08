@@ -131,10 +131,16 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     await apiClient.play(guildId, track.url, 'opus', startAt);
     await waitForReady(guildId);
 
+    // Clear suppress flag after new track is ready. By now any finished event for
+    // the old track has been processed (Go socket is in-order). If the old track
+    // already finished naturally before the command was called, Go won't send
+    // another finished event, so the flag would leak and block the NEXT track's
+    // auto-advance.
+    session.suppressAutoAdvanceFor.delete(guildId);
+
     const audioStream = socketClient.createDirectStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);
     if (!success) {
-      session.suppressAutoAdvanceFor.delete(guildId);
       return { success: false, error: 'Not connected to voice channel' };
     }
 

@@ -1,7 +1,8 @@
 // Bot Controller API Hook
-// REST API calls to /api/bot/* with polling + cooldown management for a single guild
+// Guild state via WebSocket subscription + REST API calls for actions
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useBotWebSocket } from '@/contexts/BotWebSocketContext';
 
 export interface Track {
   url: string;
@@ -46,16 +47,24 @@ async function apiFetch(path: string, options?: RequestInit) {
 }
 
 export function useBotApi(guildId: string) {
+  const { subscribe } = useBotWebSocket();
   const [guildState, setGuildState] = useState<GuildState | null>(null);
-  const [isLoadingState, setIsLoadingState] = useState(false);
+  const [isLoadingState, setIsLoadingState] = useState(true);
   const [cooldowns, setCooldowns] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
 
-  const mountedRef = useRef(true);
+  // Subscribe to guild state via WebSocket
   useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+    setIsLoadingState(true);
+    setGuildState(null);
+
+    const unsubscribe = subscribe(guildId, (state) => {
+      setGuildState(state);
+      setIsLoadingState(false);
+    });
+
+    return unsubscribe;
+  }, [guildId, subscribe]);
 
   const isCoolingDown = useCallback((action: string): boolean => {
     return (cooldowns[action] || 0) > Date.now();
@@ -66,32 +75,6 @@ export function useBotApi(guildId: string) {
     if (!ms) return;
     setCooldowns(prev => ({ ...prev, [action]: Date.now() + ms }));
   }, []);
-
-  // Fetch guild state (only show loading on first fetch, not on polls)
-  const fetchGuildState = useCallback(async (isInitial = false) => {
-    try {
-      if (isInitial) setIsLoadingState(true);
-      const data = await apiFetch(`/api/bot/guild/${guildId}/state`);
-      if (!mountedRef.current) return;
-      if (data.error) {
-        setGuildState(null);
-      } else {
-        setGuildState(data);
-      }
-    } catch {
-      if (!mountedRef.current) return;
-      setGuildState(null);
-    } finally {
-      if (mountedRef.current && isInitial) setIsLoadingState(false);
-    }
-  }, [guildId]);
-
-  // Poll guild state every 2s
-  useEffect(() => {
-    fetchGuildState(true);
-    const interval = setInterval(() => fetchGuildState(false), 2000);
-    return () => clearInterval(interval);
-  }, [fetchGuildState]);
 
   // Clear cooldowns periodically
   useEffect(() => {
@@ -112,7 +95,7 @@ export function useBotApi(guildId: string) {
     return () => clearInterval(interval);
   }, []);
 
-  // Action helpers
+  // Action helpers - REST calls, state comes back via WebSocket push
   const doAction = useCallback(async (
     action: string,
     path: string,
@@ -131,11 +114,11 @@ export function useBotApi(guildId: string) {
       if (!data.success) {
         setError(data.error || 'Action failed');
       }
-      fetchGuildState();
+      // No manual fetch needed - WebSocket will push updated state
     } catch {
       setError(`Failed to ${action}`);
     }
-  }, [isCoolingDown, startCooldown, fetchGuildState]);
+  }, [isCoolingDown, startCooldown]);
 
   const pause = useCallback(() => {
     doAction('pause', `/api/bot/guild/${guildId}/pause`);
@@ -192,6 +175,5 @@ export function useBotApi(guildId: string) {
     stop,
     removeFromQueue,
     clearQueue,
-    refreshState: fetchGuildState,
   };
 }
