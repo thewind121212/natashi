@@ -49,6 +49,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         value: 'Seek to a time position (e.g. `1:30`, `90`).',
       },
       {
+        name: '/remove <position>',
+        value: 'Remove a track from the queue by position.',
+      },
+      {
         name: '/queue',
         value: 'Show the current queue with pagination.',
       },
