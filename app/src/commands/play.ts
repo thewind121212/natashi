@@ -16,6 +16,7 @@ import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
 import { Track } from '../queue-manager';
 import * as YouTubeSearch from 'youtube-search-api';
+import { isSpotifyUrl, resolveSpotifyUrl } from '../spotify-resolver';
 
 interface YouTubeSearchItem {
   id: string;
@@ -191,6 +192,13 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   if (focusedValue.includes('youtube.com') || focusedValue.includes('youtu.be')) {
     await interaction.respond([
       { name: `URL: ${focusedValue.slice(0, 90)}`, value: focusedValue },
+    ]);
+    return;
+  }
+
+  if (focusedValue.includes('spotify.com')) {
+    await interaction.respond([
+      { name: `Spotify: ${focusedValue.slice(0, 87)}`, value: focusedValue },
     ]);
     return;
   }
@@ -432,6 +440,92 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Store client and channel for auto-advance messages
     discordClient = interaction.client;
     session.textChannelId = interaction.channelId;
+
+    // Handle Spotify URLs → resolve to YouTube
+    if (isSpotifyUrl(query)) {
+      await interaction.editReply('Resolving Spotify...');
+
+      const tracks = await resolveSpotifyUrl(query, (done, total) => {
+        interaction.editReply(`Resolving Spotify tracks: ${done}/${total}...`).catch(() => {});
+      });
+
+      if (tracks.length === 0) {
+        await interaction.editReply('Could not resolve Spotify URL.');
+        return;
+      }
+
+      for (const track of tracks) {
+        session.queueManager.addTrack(track.url, track.title, track.duration, track.thumbnail);
+      }
+
+      if (tracks.length === 1) {
+        // Single track
+        if (!wasPlaying) {
+          const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
+          if (track) {
+            const voiceChannel = member.voice.channel;
+            voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
+
+            const embed = new EmbedBuilder()
+              .setColor(0x1DB954) // Spotify green
+              .setTitle('Now Playing (from Spotify)')
+              .setDescription(track.title)
+              .setThumbnail(track.thumbnail || null)
+              .addFields({
+                name: 'Duration',
+                value: formatDuration(track.duration),
+                inline: true,
+              });
+
+            playTrack(guildId, track);
+            await interaction.editReply({ content: '', embeds: [embed] });
+          }
+        } else {
+          const queuePos = session.queueManager.getQueue().length;
+          const t = tracks[0];
+          const embed = new EmbedBuilder()
+            .setColor(0x1DB954)
+            .setTitle('Added to Queue (from Spotify)')
+            .setDescription(`**${t.title}**`)
+            .setThumbnail(t.thumbnail || null)
+            .addFields(
+              { name: 'Duration', value: formatDuration(t.duration), inline: true },
+              { name: 'Position in Queue', value: `#${queuePos}`, inline: true },
+            );
+          await interaction.editReply({ content: '', embeds: [embed] });
+        }
+      } else {
+        // Playlist/album
+        const embed = new EmbedBuilder()
+          .setColor(0x1DB954)
+          .setTitle('Spotify Playlist Added')
+          .setDescription(`Added **${tracks.length}** tracks to the queue`)
+          .addFields({
+            name: 'Queue Size',
+            value: `${session.queueManager.getQueue().length} tracks`,
+            inline: true,
+          });
+
+        if (!wasPlaying) {
+          const firstTrack = session.queueManager.startPlaying(
+            session.queueManager.getQueue().length - tracks.length,
+          );
+          if (firstTrack) {
+            const voiceChannel = member.voice.channel;
+            voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
+            await playTrack(guildId, firstTrack);
+            embed.addFields({
+              name: 'Now Playing',
+              value: firstTrack.title,
+              inline: false,
+            });
+          }
+        }
+
+        await interaction.editReply({ content: '', embeds: [embed] });
+      }
+      return;
+    }
 
     // Determine if input is URL or search query
     let url = query;

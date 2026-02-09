@@ -11,6 +11,7 @@ import { SessionStore, UserSession } from './session-store';
 import { SqliteStore } from './sqlite-store';
 import { verifyToken, JwtPayload } from './auth/jwt';
 import { config } from './config';
+import { isSpotifyUrl, resolveSpotifyUrl } from './spotify-resolver';
 
 // Parse duration string like "3:45" or "1:23:45" to seconds
 function parseDuration(durationStr: string): number {
@@ -378,6 +379,39 @@ export class WebSocketHandler {
     await this.abortCurrentPlayback(session);
 
     try {
+      // Spotify URL → resolve to YouTube first
+      if (isSpotifyUrl(url)) {
+        this.log('nodejs', 'Detected Spotify URL, resolving to YouTube...', session.userId);
+        this.broadcastJsonToUser(session.userId, { type: 'status', message: 'Resolving Spotify...' });
+
+        const tracks = await resolveSpotifyUrl(url, (done, total) => {
+          this.broadcastJsonToUser(session.userId, {
+            type: 'status',
+            message: `Resolving Spotify tracks: ${done}/${total}...`,
+          });
+        });
+
+        if (requestId !== session.activePlayRequestId) return;
+
+        if (tracks.length === 0) {
+          this.broadcastJsonToUser(session.userId, { type: 'error', message: 'Could not resolve Spotify URL' });
+          return;
+        }
+
+        for (const track of tracks) {
+          session.queueManager.addTrack(track.url, track.title, track.duration, track.thumbnail);
+        }
+
+        const firstTrack = session.queueManager.startPlaying(
+          session.queueManager.getQueue().length - tracks.length,
+        );
+        if (firstTrack) {
+          this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: firstTrack });
+          await this.playTrack(session, firstTrack.url, requestId, 0, firstTrack.duration);
+        }
+        return;
+      }
+
       // Check if playlist URL (exclude YouTube Mix/Radio playlists)
       const listMatch = url.match(/[?&]list=([^&]+)/);
       const isPlaylist = (url.includes('list=') || url.includes('/playlist'))
@@ -604,14 +638,32 @@ export class WebSocketHandler {
       } else if (message.action === 'addToQueue' && message.url) {
         this.log('nodejs', `Adding to queue: ${message.url}`, session.userId);
         try {
-          const videoId = this.extractVideoId(message.url);
-          const metadata = await getFastMetadata(message.url, videoId);
-          const title = metadata?.title || 'Unknown';
-          const duration = metadata?.duration || 0;
-          const thumbnail = metadata?.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+          if (isSpotifyUrl(message.url)) {
+            this.broadcastJsonToUser(session.userId, { type: 'status', message: 'Resolving Spotify...' });
+            const tracks = await resolveSpotifyUrl(message.url, (done, total) => {
+              this.broadcastJsonToUser(session.userId, {
+                type: 'status',
+                message: `Resolving Spotify tracks: ${done}/${total}...`,
+              });
+            });
+            if (tracks.length === 0) {
+              this.broadcastJsonToUser(session.userId, { type: 'error', message: 'Could not resolve Spotify URL' });
+              return;
+            }
+            for (const track of tracks) {
+              session.queueManager.addTrack(track.url, track.title, track.duration, track.thumbnail);
+            }
+            this.log('nodejs', `Added ${tracks.length} Spotify track(s) to queue`, session.userId);
+          } else {
+            const videoId = this.extractVideoId(message.url);
+            const metadata = await getFastMetadata(message.url, videoId);
+            const title = metadata?.title || 'Unknown';
+            const duration = metadata?.duration || 0;
+            const thumbnail = metadata?.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
 
-          session.queueManager.addTrack(message.url, title, duration, thumbnail);
-          this.log('nodejs', `Added to queue: ${title}`, session.userId);
+            session.queueManager.addTrack(message.url, title, duration, thumbnail);
+            this.log('nodejs', `Added to queue: ${title}`, session.userId);
+          }
 
           if (!session.currentSessionId) {
             const track = session.queueManager.startPlaying(0);

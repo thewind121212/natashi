@@ -28,30 +28,38 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  if (!voiceManager.isConnected(guildId)) {
-    await interaction.reply({
-      content: 'Not currently playing anything.',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
   try {
-    // Clean up audio stream
+    // Clean up audio stream (safe even if not active)
     socketClient.endAudioStreamForSession(guildId);
-    await apiClient.stop(guildId);
+
+    // Try to stop Go session (ignore errors - might not have an active session)
+    try {
+      await apiClient.stop(guildId);
+    } catch {
+      // No active Go session, that's fine
+    }
 
     // Clear session state
     discordSessions.reset(guildId);
 
-    // Leave voice channel
+    // Always leave voice channel
+    const wasConnected = voiceManager.isConnected(guildId);
     voiceManager.leave(guildId);
 
-    await interaction.reply({
-      content: 'Stopped playback and cleared the queue.',
-    });
+    if (wasConnected) {
+      await interaction.reply({
+        content: 'Stopped playback and disconnected.',
+      });
+    } else {
+      await interaction.reply({
+        content: 'Disconnected.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   } catch (error) {
     console.error('[Stop] Error:', error);
+    // Still try to leave voice even if something else failed
+    voiceManager.leave(guildId);
     await interaction.reply({
       content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
     });
