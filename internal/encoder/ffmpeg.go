@@ -13,6 +13,7 @@ type FFmpegPipeline struct {
 	config         Config
 	cmd            *exec.Cmd
 	stdout         io.ReadCloser
+	stderr         io.ReadCloser
 	output         chan []byte
 	cancel         context.CancelFunc
 	readBufferSize int
@@ -66,11 +67,20 @@ func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format For
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
+	// Capture stderr for debugging - FFmpeg sends errors/warnings here
+	p.stderr, err = p.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
 	fmt.Printf("[FFmpeg] Started with PID %d\n", p.cmd.Process.Pid)
+
+	// Log stderr in background (helps debug premature stream endings)
+	go p.readStderr()
 
 	go p.readOutput(ctx)
 
@@ -211,6 +221,50 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec f
 	return args
 }
 
+// readStderr reads FFmpeg stderr and logs any errors/warnings.
+// This helps debug why streams end prematurely.
+func (p *FFmpegPipeline) readStderr() {
+	if p.stderr == nil {
+		return
+	}
+	defer p.stderr.Close()
+
+	buf := make([]byte, 4096)
+	var accumulated []byte
+
+	for {
+		n, err := p.stderr.Read(buf)
+		if n > 0 {
+			accumulated = append(accumulated, buf[:n]...)
+			// Log complete lines
+			for {
+				idx := -1
+				for i, b := range accumulated {
+					if b == '\n' {
+						idx = i
+						break
+					}
+				}
+				if idx < 0 {
+					break
+				}
+				line := string(accumulated[:idx])
+				accumulated = accumulated[idx+1:]
+				if len(line) > 0 {
+					fmt.Printf("[FFmpeg] [%s] STDERR: %s\n", p.shortSessionID(), line)
+				}
+			}
+		}
+		if err != nil {
+			// Log any remaining data
+			if len(accumulated) > 0 {
+				fmt.Printf("[FFmpeg] [%s] STDERR: %s\n", p.shortSessionID(), string(accumulated))
+			}
+			return
+		}
+	}
+}
+
 // readOutput reads from FFmpeg stdout and sends chunks to output channel.
 func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	defer close(p.output)
@@ -225,15 +279,17 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("[FFmpeg] [%s] Stopped, total: %d bytes\n", p.shortSessionID(), totalBytes)
+			fmt.Printf("[FFmpeg] [%s] Stopped (context cancelled), total: %d bytes\n", p.shortSessionID(), totalBytes)
+			p.waitAndLogExit()
 			return
 		default:
 			n, err := p.stdout.Read(buf)
 			if err != nil {
 				if err != io.EOF {
-					fmt.Printf("[FFmpeg] Read error: %v\n", err)
+					fmt.Printf("[FFmpeg] [%s] Read error: %v\n", p.shortSessionID(), err)
 				}
-				fmt.Printf("[FFmpeg] Stream ended, total: %d bytes in %d chunks\n", totalBytes, chunkCount)
+				fmt.Printf("[FFmpeg] [%s] Stream ended, total: %d bytes in %d chunks\n", p.shortSessionID(), totalBytes, chunkCount)
+				p.waitAndLogExit()
 				return
 			}
 			if n > 0 {
@@ -256,5 +312,22 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 				}
 			}
 		}
+	}
+}
+
+// waitAndLogExit waits for FFmpeg to exit and logs the exit code.
+func (p *FFmpegPipeline) waitAndLogExit() {
+	if p.cmd == nil {
+		return
+	}
+	err := p.cmd.Wait()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			fmt.Printf("[FFmpeg] [%s] Exited with code %d\n", p.shortSessionID(), exitErr.ExitCode())
+		} else {
+			fmt.Printf("[FFmpeg] [%s] Wait error: %v\n", p.shortSessionID(), err)
+		}
+	} else {
+		fmt.Printf("[FFmpeg] [%s] Exited normally (code 0)\n", p.shortSessionID())
 	}
 }

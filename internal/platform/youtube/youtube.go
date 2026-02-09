@@ -198,7 +198,35 @@ type PlaylistEntry struct {
 	Thumbnail string `json:"thumbnail"`
 }
 
+// isUnavailableVideo checks if a video is deleted, private, or otherwise unavailable.
+func isUnavailableVideo(id, title string) bool {
+	// No ID means the video can't be played
+	if id == "" {
+		return true
+	}
+
+	// Check for common unavailable video title patterns
+	titleLower := strings.ToLower(title)
+	unavailablePatterns := []string{
+		"[deleted video]",
+		"[private video]",
+		"[unavailable video]",
+		"deleted video",
+		"private video",
+	}
+	for _, pattern := range unavailablePatterns {
+		if strings.Contains(titleLower, pattern) {
+			return true
+		}
+	}
+
+	// Empty title is suspicious but not definitive
+	// Some videos have empty titles during extraction but are still playable
+	return false
+}
+
 // ExtractPlaylist extracts all videos from a YouTube playlist.
+// Deleted, private, and unavailable videos are automatically filtered out.
 func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error) {
 	playlistURL = normalizeYouTubeURL(playlistURL)
 	args := []string{
@@ -225,6 +253,7 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 	// yt-dlp outputs one JSON per line for flat-playlist
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	entries := make([]PlaylistEntry, 0, len(lines))
+	skippedCount := 0
 
 	for _, line := range lines {
 		if line == "" {
@@ -239,6 +268,13 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 		}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue // Skip malformed entries
+		}
+
+		// Filter out deleted/private/unavailable videos
+		if isUnavailableVideo(entry.ID, entry.Title) {
+			skippedCount++
+			fmt.Printf("[YouTube] Skipping unavailable video: %s (ID: %s)\n", entry.Title, entry.ID)
+			continue
 		}
 
 		// Build full URL if only ID provided
@@ -262,8 +298,12 @@ func (e *Extractor) ExtractPlaylist(playlistURL string) ([]PlaylistEntry, error)
 		})
 	}
 
+	if skippedCount > 0 {
+		fmt.Printf("[YouTube] Filtered out %d unavailable video(s) from playlist\n", skippedCount)
+	}
+
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("no videos found in playlist")
+		return nil, fmt.Errorf("no playable videos found in playlist (all videos may be deleted or private)")
 	}
 
 	return entries, nil

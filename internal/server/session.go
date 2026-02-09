@@ -46,19 +46,32 @@ func (s SessionState) String() string {
 	}
 }
 
+// Retry configuration
+const (
+	maxRetries          = 3               // Maximum retry attempts for premature stream endings
+	minPlayedForRetry   = 5 * time.Second // Minimum played time before considering retry
+	prematureEndingGap  = 10.0            // Seconds before expected end to consider premature
+)
+
 // Session represents an active audio playback session.
 type Session struct {
-	ID        string
-	State     SessionState
-	URL       string
-	Format    encoder.Format
-	StartAt   float64
-	Pipeline  encoder.Pipeline
-	Cancel    context.CancelFunc
-	BytesSent int64
-	isPaused  bool
-	resumeCh  chan struct{} // Signal to resume from pause
-	mu        sync.Mutex
+	ID               string
+	State            SessionState
+	URL              string
+	Format           encoder.Format
+	StartAt          float64
+	Pipeline         encoder.Pipeline
+	Cancel           context.CancelFunc
+	BytesSent        int64
+	isPaused         bool
+	resumeCh         chan struct{} // Signal to resume from pause
+	mu               sync.Mutex
+
+	// Auto-retry fields
+	expectedDuration float64   // Expected duration in seconds (from metadata)
+	streamStartTime  time.Time // When streaming started (for calculating played time)
+	retryCount       int       // Current retry attempt
+	isStopped        bool      // Explicitly stopped by user (don't retry)
 }
 
 // SessionManager manages active playback sessions.
@@ -144,14 +157,25 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string, 
 
 // runPlayback runs the playback pipeline for a session.
 func (m *SessionManager) runPlayback(session *Session) {
+	m.runPlaybackWithRetry(session, session.StartAt)
+}
+
+// runPlaybackWithRetry runs playback with retry support for premature endings.
+func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition float64) {
 	// Create cancellable context FIRST - allows Stop() to cancel during extraction
 	sessionCtx, cancel := context.WithCancel(m.ctx)
 	session.mu.Lock()
 	session.Cancel = cancel
+	session.isStopped = false
 	session.mu.Unlock()
 
 	session.SetState(StateExtracting)
-	fmt.Printf("[Session] Starting playback for %s\n", shortSessionID(session.ID))
+	isRetry := session.retryCount > 0
+	if isRetry {
+		fmt.Printf("[Session] Retry #%d for %s (seeking to %.1fs)\n", session.retryCount, shortSessionID(session.ID), seekPosition)
+	} else {
+		fmt.Printf("[Session] Starting playback for %s\n", shortSessionID(session.ID))
+	}
 
 	// Find extractor for URL
 	extractor := m.registry.FindExtractor(session.URL)
@@ -169,7 +193,19 @@ func (m *SessionManager) runPlayback(session *Session) {
 	default:
 	}
 
-	// Extract stream URL
+	// Get metadata for duration (only on first attempt, skip on retry to save time)
+	if !isRetry && session.expectedDuration == 0 {
+		if ytExtractor, ok := extractor.(*youtube.Extractor); ok {
+			if meta, err := ytExtractor.ExtractMetadata(session.URL); err == nil && meta.Duration > 0 {
+				session.mu.Lock()
+				session.expectedDuration = float64(meta.Duration)
+				session.mu.Unlock()
+				fmt.Printf("[Session] Track duration: %.0fs\n", session.expectedDuration)
+			}
+		}
+	}
+
+	// Extract stream URL (fresh URL for each attempt - important for retries)
 	fmt.Println("[Session] Extracting stream URL...")
 	streamURL, err := extractor.ExtractStreamURL(session.URL)
 	if err != nil {
@@ -193,31 +229,68 @@ func (m *SessionManager) runPlayback(session *Session) {
 	pipeline.SetSessionID(session.ID)
 	session.mu.Lock()
 	session.Pipeline = pipeline
+	session.BytesSent = 0 // Reset bytes for this attempt
+	session.streamStartTime = time.Now()
 	session.mu.Unlock()
 
-	// Start pipeline
-	fmt.Println("[Session] Starting encoding pipeline...")
-	if err := pipeline.Start(sessionCtx, streamURL, session.Format, session.StartAt); err != nil {
+	// Start pipeline with seek position
+	fmt.Printf("[Session] Starting encoding pipeline (seek: %.1fs)...\n", seekPosition)
+	if err := pipeline.Start(sessionCtx, streamURL, session.Format, seekPosition); err != nil {
 		session.SetState(StateError)
 		m.sendEvent(session.ID, "error", fmt.Sprintf("pipeline failed: %v", err))
 		return
 	}
 
 	session.SetState(StateStreaming)
-	m.sendEvent(session.ID, "ready", "")
+
+	// Only send ready event on first attempt (not on retry)
+	if !isRetry {
+		m.sendEvent(session.ID, "ready", "")
+	}
 
 	// Stream audio data
-	m.streamAudio(session, sessionCtx)
+	prematureEnd := m.streamAudio(session, sessionCtx)
+
+	// Check if we should retry
+	session.mu.Lock()
+	stopped := session.isStopped
+	retries := session.retryCount
+	expectedDur := session.expectedDuration
+	session.mu.Unlock()
+
+	if prematureEnd && !stopped && retries < maxRetries {
+		// Calculate where we stopped
+		playedTime := time.Since(session.streamStartTime).Seconds()
+		newSeekPosition := seekPosition + playedTime
+
+		// Only retry if we played some content and haven't reached near the end
+		if playedTime >= minPlayedForRetry.Seconds() &&
+		   (expectedDur == 0 || newSeekPosition < expectedDur-prematureEndingGap) {
+			session.mu.Lock()
+			session.retryCount++
+			session.mu.Unlock()
+
+			fmt.Printf("[Session] Premature end detected for %s (played %.1fs), retrying from %.1fs...\n",
+				shortSessionID(session.ID), playedTime, newSeekPosition)
+
+			// Small delay before retry to avoid hammering YouTube
+			time.Sleep(1 * time.Second)
+
+			// Retry with new seek position
+			m.runPlaybackWithRetry(session, newSeekPosition)
+			return
+		}
+	}
+
+	// Normal end or no retry needed
+	session.SetState(StateStopped)
+	m.sendEvent(session.ID, "finished", "")
+	fmt.Printf("[Session] Streaming finished for %s, sent %d bytes\n", shortSessionID(session.ID), session.BytesSent)
 }
 
 // streamAudio streams audio data from pipeline to socket connection.
-func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
-	defer func() {
-		session.SetState(StateStopped)
-		m.sendEvent(session.ID, "finished", "")
-		fmt.Printf("[Session] Streaming finished for %s, sent %d bytes\n", shortSessionID(session.ID), session.BytesSent)
-	}()
-
+// Returns true if the stream ended prematurely (potential retry candidate).
+func (m *SessionManager) streamAudio(session *Session, ctx context.Context) (prematureEnd bool) {
 	output := session.Pipeline.Output()
 	if session.Format == encoder.FormatWeb {
 		paced := buffer.NewPacedBuffer(buffer.Config{
@@ -232,10 +305,34 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			// Context cancelled (user stopped) - not a premature end
+			return false
 		case chunk, ok := <-output:
 			if !ok {
-				return // Channel closed
+				// Channel closed - check if premature
+				session.mu.Lock()
+				playedTime := time.Since(session.streamStartTime).Seconds()
+				expectedDur := session.expectedDuration
+				stopped := session.isStopped
+				session.mu.Unlock()
+
+				// Consider premature if:
+				// 1. Not explicitly stopped by user
+				// 2. Expected duration is known and we're well short of it
+				// 3. OR expected duration unknown but we played very little
+				if !stopped {
+					if expectedDur > 0 && playedTime < expectedDur-prematureEndingGap {
+						fmt.Printf("[Session] Stream ended early for %s: played %.1fs of expected %.1fs\n",
+							shortSessionID(session.ID), playedTime, expectedDur)
+						return true
+					} else if expectedDur == 0 && playedTime < 30 {
+						// Unknown duration but very short playback - likely an error
+						fmt.Printf("[Session] Stream ended suspiciously early for %s: only %.1fs played\n",
+							shortSessionID(session.ID), playedTime)
+						return true
+					}
+				}
+				return false
 			}
 
 			// Check if paused BEFORE writing (immediate response)
@@ -258,7 +355,7 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) {
 				for {
 					select {
 					case <-ctx.Done():
-						return
+						return false // Context cancelled - not premature
 					case <-session.resumeCh:
 						// Check if actually resumed (not a stale signal)
 						session.mu.Lock()
@@ -454,6 +551,7 @@ func (s *Session) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.isStopped = true // Mark as explicitly stopped (prevents auto-retry)
 	if s.Cancel != nil {
 		s.Cancel()
 	}
