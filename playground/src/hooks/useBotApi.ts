@@ -17,6 +17,7 @@ export interface GuildState {
   guildName: string;
   voiceChannelId: string | null;
   voiceChannelName: string | null;
+  textChannelId: string | null;
   nowPlaying: Track | null;
   queue: Track[];
   currentIndex: number;
@@ -129,24 +130,24 @@ export function useBotApi(guildId: string) {
   }, [guildId, doAction]);
 
   const skip = useCallback(() => {
-    doAction('skip', `/api/bot/guild/${guildId}/skip`);
-  }, [guildId, doAction]);
+    doAction('skip', `/api/bot/guild/${guildId}/skip`, 'POST', { channelId: guildState?.textChannelId });
+  }, [guildId, guildState?.textChannelId, doAction]);
 
   const previous = useCallback(() => {
-    doAction('previous', `/api/bot/guild/${guildId}/previous`);
-  }, [guildId, doAction]);
+    doAction('previous', `/api/bot/guild/${guildId}/previous`, 'POST', { channelId: guildState?.textChannelId });
+  }, [guildId, guildState?.textChannelId, doAction]);
 
   const seek = useCallback((position: number) => {
-    doAction('seek', `/api/bot/guild/${guildId}/seek`, 'POST', { position });
-  }, [guildId, doAction]);
+    doAction('seek', `/api/bot/guild/${guildId}/seek`, 'POST', { position, channelId: guildState?.textChannelId });
+  }, [guildId, guildState?.textChannelId, doAction]);
 
   const jump = useCallback((index: number) => {
-    doAction('jump', `/api/bot/guild/${guildId}/jump`, 'POST', { index });
-  }, [guildId, doAction]);
+    doAction('jump', `/api/bot/guild/${guildId}/jump`, 'POST', { index, channelId: guildState?.textChannelId });
+  }, [guildId, guildState?.textChannelId, doAction]);
 
   const play = useCallback((url: string) => {
-    doAction('play', `/api/bot/guild/${guildId}/play`, 'POST', { url });
-  }, [guildId, doAction]);
+    doAction('play', `/api/bot/guild/${guildId}/play`, 'POST', { url, channelId: guildState?.textChannelId });
+  }, [guildId, guildState?.textChannelId, doAction]);
 
   const stop = useCallback(() => {
     doAction('stop', `/api/bot/guild/${guildId}/stop`);

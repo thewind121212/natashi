@@ -202,6 +202,7 @@ export interface GuildStateResponse {
   guildName: string;
   voiceChannelId: string | null;
   voiceChannelName: string | null;
+  textChannelId: string | null;
   nowPlaying: Track | null;
   queue: Track[];
   currentIndex: number;
@@ -708,6 +709,7 @@ export function getGuildState(guildId: string, client: Client): GuildStateRespon
     guildName: guild?.name || `Guild ${guildId.slice(0, 6)}`,
     voiceChannelId,
     voiceChannelName,
+    textChannelId: session.textChannelId,
     nowPlaying: session.currentTrack,
     queue: session.queueManager.getQueue(),
     currentIndex: session.queueManager.getCurrentIndex(),
