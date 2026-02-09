@@ -360,7 +360,7 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
             .setColor(0x57F287) // Green
             .setTitle('Now Playing')
             .setDescription(`**${track.title}**`)
-            .setThumbnail(track.thumbnail || null)
+            .setThumbnail(track.thumbnail?.startsWith('http') ? track.thumbnail : null)
             .addFields({
               name: 'Duration',
               value: formatDuration(track.duration),
@@ -656,7 +656,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
             .setColor(0x57F287) // Green
             .setTitle('Now Playing')
             .setDescription(track.title)
-            .setThumbnail(track.thumbnail || null)
+            .setThumbnail(track.thumbnail?.startsWith('http') ? track.thumbnail : null)
             .addFields({
               name: 'Duration',
               value: formatDuration(track.duration),
@@ -676,7 +676,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           .setColor(0xFF69B4) // Pink
           .setTitle('Added to Queue')
           .setDescription(`**${title}**`)
-          .setThumbnail(thumbnail)
+          .setThumbnail(thumbnail?.startsWith('http') ? thumbnail : null)
           .addFields(
             { name: 'Duration', value: formatDuration(duration), inline: true },
             { name: 'Position in Queue', value: `#${queuePos}`, inline: true }

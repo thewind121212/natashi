@@ -44,7 +44,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     .setColor(session.isPaused ? 0xFEE75C : 0x57F287)
     .setTitle(statusText)
     .setDescription(`**${track.title}**`)
-    .setThumbnail(track.thumbnail || null)
+    .setThumbnail(track.thumbnail?.startsWith('http') ? track.thumbnail : null)
     .addFields(
       { name: 'Duration', value: formatDuration(track.duration), inline: true },
       { name: 'Position', value: `${currentIndex + 1}/${queue.length}`, inline: true }

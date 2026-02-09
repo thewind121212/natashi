@@ -175,7 +175,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .setColor(0xE67E22) // Orange
       .setTitle('Seeked')
       .setDescription(`**${track.title}**`)
-      .setThumbnail(track.thumbnail || null)
+      .setThumbnail(track.thumbnail?.startsWith('http') ? track.thumbnail : null)
       .addFields({
         name: 'Position',
         value: track.duration > 0

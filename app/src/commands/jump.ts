@@ -97,7 +97,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     .setColor(0x57F287) // Green
     .setTitle('Now Playing')
     .setDescription(track.title)
-    .setThumbnail(track.thumbnail || null)
+    .setThumbnail(track.thumbnail?.startsWith('http') ? track.thumbnail : null)
     .addFields(
       { name: 'Duration', value: formatDuration(track.duration), inline: true },
       { name: 'Position', value: `#${position} of ${queue.length}`, inline: true }
