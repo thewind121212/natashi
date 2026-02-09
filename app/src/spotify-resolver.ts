@@ -19,10 +19,8 @@ export interface SpotifyTrackInfo {
   title: string;
   artist: string;
   durationMs: number;
-  spotifyId: string; // track ID extracted from URI
+  thumbnail: string;
 }
-
-export const SPOTIFY_THUMB_PREFIX = 'spotify:thumb:';
 
 interface SpotifyOEmbed {
   title: string;
@@ -81,14 +79,13 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
 
   if (type === 'track') {
     try {
-      const trackId = spotifyUrl.match(/track\/([a-zA-Z0-9]+)/)?.[1] || '';
       const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`;
       const response = await fetch(oembedUrl);
       if (!response.ok) return [];
       const data = (await response.json()) as SpotifyOEmbed;
       if (!data?.title) return [];
-      // oEmbed title is "Track Name - Artist"
-      return [{ title: data.title, artist: '', durationMs: 0, spotifyId: trackId }];
+      // oEmbed title is "Track Name - Artist", thumbnail_url is album art
+      return [{ title: data.title, artist: '', durationMs: 0, thumbnail: data.thumbnail_url || '' }];
     } catch {
       return [];
     }
@@ -109,8 +106,15 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
     if (!scriptMatch) return [];
 
     const json = JSON.parse(scriptMatch[1]);
-    const trackList = json?.props?.pageProps?.state?.data?.entity?.trackList;
+    const entity = json?.props?.pageProps?.state?.data?.entity;
+    const trackList = entity?.trackList;
     if (!Array.isArray(trackList)) return [];
+
+    // Extract cover art: visualIdentity has multiple resolutions, pick largest
+    const viImages = entity?.visualIdentity?.image as Array<{ url: string; width: number; height: number }> | undefined;
+    const coverArtUrl = entity?.coverArt?.sources?.[0]?.url as string | undefined;
+    const bestImage = viImages?.reduce((best, img) => (img.width > best.width ? img : best), viImages[0]);
+    const thumbnail = bestImage?.url || coverArtUrl || '';
 
     return trackList
       .filter((t: SpotifyEmbedTrack) => t.isPlayable && t.title)
@@ -118,7 +122,7 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
         title: t.title,
         artist: t.subtitle || '',
         durationMs: t.duration || 0,
-        spotifyId: t.uri?.split(':').pop() || '',
+        thumbnail,
       }));
   } catch {
     return [];

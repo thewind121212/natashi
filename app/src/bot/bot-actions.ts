@@ -9,6 +9,7 @@ import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 import { discordSessions, type GuildSession } from '../discord/session-store';
 import type { Track } from '../queue-manager';
+import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
 
 interface YouTubeSearchItem {
   id: string;
@@ -245,6 +246,31 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
+    // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
+    if (isSpotifySearchUrl(track.url)) {
+      console.log(`[BotActions] Resolving Spotify track: ${track.title}`);
+      const resolved = await resolveSpotifySearch(track.url);
+      if (!resolved) {
+        console.log(`[BotActions] Failed to resolve Spotify track: ${track.title}, skipping...`);
+        session.suppressAutoAdvanceFor.delete(guildId);
+        const nextTrack = session.queueManager.skip();
+        if (nextTrack) {
+          return startTrackOnGuild(guildId, session, nextTrack);
+        }
+        return { success: false, error: 'Could not find this track on YouTube' };
+      }
+      const idx = session.queueManager.getCurrentIndex();
+      if (idx >= 0) {
+        session.queueManager.updateTrack(idx, {
+          url: resolved.url,
+          thumbnail: resolved.thumbnail,
+          duration: resolved.duration || track.duration,
+        });
+      }
+      track = { ...track, url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || track.duration };
+      console.log(`[BotActions] Resolved to: ${resolved.url}`);
+    }
+
     session.currentTrack = track;
     session.isPaused = false;
 
@@ -467,6 +493,35 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
 
   try {
     const wasPlaying = session.currentTrack !== null;
+
+    // Handle Spotify URLs
+    if (isSpotifyUrl(url)) {
+      const spotifyTracks = await getSpotifyTracks(url);
+      if (spotifyTracks.length === 0) {
+        return { success: false, error: 'Could not load Spotify URL' };
+      }
+
+      for (const t of spotifyTracks) {
+        const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
+        session.queueManager.addTrack(
+          buildSpotifySearchUrl(t.title, t.artist),
+          displayTitle,
+          Math.round(t.durationMs / 1000),
+          t.thumbnail || undefined,
+        );
+      }
+
+      if (!wasPlaying) {
+        const startIdx = session.queueManager.getQueue().length - spotifyTracks.length;
+        const firstTrack = session.queueManager.startPlaying(startIdx);
+        if (firstTrack) {
+          const result = await startTrackOnGuild(guildId, session, firstTrack);
+          return { ...result, data: { ...result.data, count: spotifyTracks.length, spotify: true } };
+        }
+      }
+
+      return { success: true, data: { count: spotifyTracks.length, spotify: true, queued: wasPlaying } };
+    }
 
     if (isPlaylistUrl(url)) {
       // Handle playlist using fast youtube-search-api (no yt-dlp)

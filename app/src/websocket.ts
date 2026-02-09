@@ -11,7 +11,7 @@ import { SessionStore, UserSession } from './session-store';
 import { SqliteStore } from './sqlite-store';
 import { verifyToken, JwtPayload } from './auth/jwt';
 import { config } from './config';
-import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch, SPOTIFY_THUMB_PREFIX } from './spotify-resolver';
+import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch } from './spotify-resolver';
 
 // Parse duration string like "3:45" or "1:23:45" to seconds
 function parseDuration(durationStr: string): number {
@@ -392,15 +392,14 @@ export class WebSocketHandler {
           return;
         }
 
-        // Add all tracks instantly with spotify:search: placeholder URLs + spotify:thumb: thumbnails
+        // Add all tracks with spotify:search: placeholder URLs + resolved thumbnails
         for (const t of spotifyTracks) {
           const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
-          const thumbnail = t.spotifyId ? `${SPOTIFY_THUMB_PREFIX}${t.spotifyId}` : undefined;
           session.queueManager.addTrack(
             buildSpotifySearchUrl(t.title, t.artist),
             displayTitle,
             Math.round(t.durationMs / 1000),
-            thumbnail,
+            t.thumbnail || undefined,
           );
         }
 
@@ -683,12 +682,11 @@ export class WebSocketHandler {
             }
             for (const t of spotifyTracks) {
               const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
-              const thumbnail = t.spotifyId ? `${SPOTIFY_THUMB_PREFIX}${t.spotifyId}` : undefined;
               session.queueManager.addTrack(
                 buildSpotifySearchUrl(t.title, t.artist),
                 displayTitle,
                 Math.round(t.durationMs / 1000),
-                thumbnail,
+                t.thumbnail || undefined,
               );
             }
             this.log('nodejs', `Added ${spotifyTracks.length} Spotify track(s) to queue`, session.userId);

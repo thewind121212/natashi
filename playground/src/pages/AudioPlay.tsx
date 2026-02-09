@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '../contexts/AuthContext';
-import { useSpotifyThumbnail } from '@/hooks/useSpotifyThumbnail';
 import { AppHeader } from '@/components/AppHeader';
 import {
   Play,
@@ -21,15 +20,6 @@ import {
   VolumeX,
   RotateCcw,
 } from 'lucide-react';
-
-// Wrapper so each queue item can call the useSpotifyThumbnail hook
-function QueueTrackImage({ thumbnail }: { thumbnail?: string }) {
-  const resolved = useSpotifyThumbnail(thumbnail);
-  if (resolved) {
-    return <img src={resolved} alt="cover" className="w-full h-full object-cover" />;
-  }
-  return <Music size={16} className="text-slate-500" />;
-}
 
 export default function AudioPlay() {
   const [urlInput, setUrlInput] = useState('');
@@ -64,8 +54,6 @@ export default function AudioPlay() {
     resetSession,
     seek,
   } = useWebSocket({ onUnauthorized: forceLogout });
-
-  const resolvedNowPlayingThumb = useSpotifyThumbnail(nowPlaying?.thumbnail);
 
   // Handle error toast display
   const errorStatus = statusType === 'error' ? status : null;
@@ -270,10 +258,10 @@ export default function AudioPlay() {
           <div className="bg-slate-800/80 backdrop-blur-xl rounded-3xl p-6 md:p-10 shadow-2xl border border-slate-700/50 flex flex-col justify-between h-full relative overflow-hidden">
 
             {/* Background Ambience */}
-            {resolvedNowPlayingThumb && (
+            {nowPlaying?.thumbnail && (
               <div className="absolute inset-0 z-0">
                 <img
-                  src={getHiResThumbnail(resolvedNowPlayingThumb)}
+                  src={getHiResThumbnail(nowPlaying.thumbnail)}
                   alt="bg"
                   className="w-full h-full object-cover opacity-20 blur-[80px] scale-150 transition-opacity duration-1000"
                 />
@@ -309,8 +297,8 @@ export default function AudioPlay() {
                 style={{ aspectRatio: '16 / 9' }}
               >
                 <div className={`w-full h-full rounded-3xl shadow-2xl overflow-hidden relative border border-white/10 ${isLoading ? 'scale-95 opacity-80' : 'scale-100 opacity-100'} transition-all duration-500`}>
-                  {resolvedNowPlayingThumb ? (
-                    <img src={getHiResThumbnail(resolvedNowPlayingThumb)} alt={nowPlaying?.title} className="w-full h-full object-cover" />
+                  {nowPlaying?.thumbnail ? (
+                    <img src={getHiResThumbnail(nowPlaying.thumbnail)} alt={nowPlaying.title} className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full bg-slate-700 flex items-center justify-center">
                       <Music size={64} className="text-slate-500" />
@@ -452,7 +440,11 @@ export default function AudioPlay() {
                       }`}
                     >
                       <div className="w-10 h-10 rounded-lg flex items-center justify-center mr-4 overflow-hidden relative shadow-sm bg-slate-700">
-                        <QueueTrackImage thumbnail={track.thumbnail} />
+                        {track.thumbnail ? (
+                          <img src={track.thumbnail} alt="cover" className="w-full h-full object-cover" />
+                        ) : (
+                          <Music size={16} className="text-slate-500" />
+                        )}
                         {isActive && isLoading && (
                           <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                             <Loader2 size={14} className="text-white animate-spin" />
