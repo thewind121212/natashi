@@ -103,7 +103,12 @@ async function startPrevTrack(
       console.log(`[Previous] Resolving Spotify track: ${track.title}`);
       const resolved = await resolveSpotifySearch(track.url);
       if (!resolved) {
-        console.error(`[Previous] Failed to resolve Spotify track: ${track.title}`);
+        console.log(`[Previous] Failed to resolve Spotify track: ${track.title}, skipping forward...`);
+        // Auto-advance to next track (can't go back to an unresolvable track)
+        const skipTrack = session.queueManager.skip();
+        if (skipTrack) {
+          await startPrevTrack(guildId, session, skipTrack);
+        }
         return;
       }
       const idx = session.queueManager.getCurrentIndex();

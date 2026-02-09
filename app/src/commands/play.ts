@@ -16,7 +16,7 @@ import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
 import { Track } from '../queue-manager';
 import * as YouTubeSearch from 'youtube-search-api';
-import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
+import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch, SPOTIFY_THUMB_PREFIX } from '../spotify-resolver';
 
 interface YouTubeSearchItem {
   id: string;
@@ -271,7 +271,17 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
     console.log(`[Play] Resolving Spotify track: ${track.title}`);
     const resolved = await resolveSpotifySearch(track.url);
     if (!resolved) {
-      console.error(`[Play] Failed to resolve Spotify track: ${track.title}`);
+      console.log(`[Play] Failed to resolve Spotify track: ${track.title}, skipping...`);
+      // Auto-advance to next track
+      const nextTrack = session.queueManager.skip();
+      if (nextTrack) {
+        await playTrack(guildId, nextTrack, sendNowPlaying);
+      } else {
+        console.log(`[Play] No more tracks in queue after skip`);
+        socketClient.endAudioStreamForSession(guildId);
+        voiceManager.stop(guildId);
+        session.currentTrack = null;
+      }
       return;
     }
     // Update the track in queue so it won't need resolving again
@@ -471,13 +481,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         return;
       }
 
-      // Add all tracks instantly with spotify:search: placeholder URLs
+      // Add all tracks instantly with spotify:search: placeholder URLs + spotify:thumb: thumbnails
       for (const t of spotifyTracks) {
         const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
+        const thumbnail = t.spotifyId ? `${SPOTIFY_THUMB_PREFIX}${t.spotifyId}` : undefined;
         session.queueManager.addTrack(
           buildSpotifySearchUrl(t.title, t.artist),
           displayTitle,
           Math.round(t.durationMs / 1000),
+          thumbnail,
         );
       }
 

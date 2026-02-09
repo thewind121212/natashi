@@ -132,7 +132,12 @@ async function startJumpTrack(
       console.log(`[Jump] Resolving Spotify track: ${resolvedTrack.title}`);
       const resolved = await resolveSpotifySearch(resolvedTrack.url);
       if (!resolved) {
-        console.error(`[Jump] Failed to resolve Spotify track: ${resolvedTrack.title}`);
+        console.log(`[Jump] Failed to resolve Spotify track: ${resolvedTrack.title}, skipping...`);
+        // Auto-advance to next track
+        const skipTrack = session.queueManager.skip();
+        if (skipTrack) {
+          await startJumpTrack(guildId, session, skipTrack);
+        }
         return;
       }
       const idx = session.queueManager.getCurrentIndex();

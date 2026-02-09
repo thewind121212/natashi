@@ -19,7 +19,10 @@ export interface SpotifyTrackInfo {
   title: string;
   artist: string;
   durationMs: number;
+  spotifyId: string; // track ID extracted from URI
 }
+
+export const SPOTIFY_THUMB_PREFIX = 'spotify:thumb:';
 
 interface SpotifyOEmbed {
   title: string;
@@ -78,13 +81,14 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
 
   if (type === 'track') {
     try {
+      const trackId = spotifyUrl.match(/track\/([a-zA-Z0-9]+)/)?.[1] || '';
       const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`;
       const response = await fetch(oembedUrl);
       if (!response.ok) return [];
       const data = (await response.json()) as SpotifyOEmbed;
       if (!data?.title) return [];
       // oEmbed title is "Track Name - Artist"
-      return [{ title: data.title, artist: '', durationMs: 0 }];
+      return [{ title: data.title, artist: '', durationMs: 0, spotifyId: trackId }];
     } catch {
       return [];
     }
@@ -114,14 +118,17 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
         title: t.title,
         artist: t.subtitle || '',
         durationMs: t.duration || 0,
+        spotifyId: t.uri?.split(':').pop() || '',
       }));
   } catch {
     return [];
   }
 }
 
+const RESOLVE_TIMEOUT_MS = 5_000; // 5s timeout for YouTube search
+
 // Resolve a single spotify:search: URL to a YouTube track
-// Called just before playback — ~500ms for one YouTube search
+// Called just before playback — ~500ms for one YouTube search, 10s timeout
 export async function resolveSpotifySearch(searchUrl: string): Promise<ResolvedTrack | null> {
   if (!searchUrl.startsWith(SPOTIFY_SEARCH_PREFIX)) return null;
   const query = searchUrl.slice(SPOTIFY_SEARCH_PREFIX.length);
@@ -130,25 +137,34 @@ export async function resolveSpotifySearch(searchUrl: string): Promise<ResolvedT
   console.log(`[Spotify] Resolving: "${query}"`);
 
   try {
-    const results = await YouTubeSearch.GetListByKeyword(query, false, 5);
-    const items = results?.items as
-      | Array<{
-          id: string;
-          type: string;
-          title: string;
-          length?: { simpleText: string };
-        }>
-      | undefined;
-    const video = items?.find((item) => item.type === 'video');
-    if (!video) return null;
+    const result = await Promise.race([
+      (async () => {
+        const results = await YouTubeSearch.GetListByKeyword(query, false, 5);
+        const items = results?.items as
+          | Array<{
+              id: string;
+              type: string;
+              title: string;
+              length?: { simpleText: string };
+            }>
+          | undefined;
+        const video = items?.find((item) => item.type === 'video');
+        if (!video) return null;
 
-    return {
-      url: `https://www.youtube.com/watch?v=${video.id}`,
-      title: video.title || query,
-      duration: parseDuration(video.length?.simpleText || ''),
-      thumbnail: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
-    };
-  } catch {
+        return {
+          url: `https://www.youtube.com/watch?v=${video.id}`,
+          title: video.title || query,
+          duration: parseDuration(video.length?.simpleText || ''),
+          thumbnail: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+        } as ResolvedTrack;
+      })(),
+      new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('Spotify resolve timeout')), RESOLVE_TIMEOUT_MS),
+      ),
+    ]);
+    return result;
+  } catch (err) {
+    console.error(`[Spotify] Resolve failed: ${err}`);
     return null;
   }
 }
