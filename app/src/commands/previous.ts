@@ -61,7 +61,33 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   // Lock transition BEFORE any async operation
   session.isTransitioning = true;
 
-  await interaction.deferReply();
+  // Show embed immediately (fast response to user)
+  const embed = new EmbedBuilder()
+    .setColor(0x57F287) // Green
+    .setTitle('Now Playing')
+    .setDescription(prevTrack.title)
+    .setThumbnail(prevTrack.thumbnail || null)
+    .addFields({
+      name: 'Duration',
+      value: formatDuration(prevTrack.duration),
+      inline: true,
+    });
+
+  await interaction.reply({ embeds: [embed] });
+
+  // Start playback in background (don't block UI)
+  startPrevTrack(guildId, session, prevTrack).catch((error) => {
+    console.error('[Previous] Background playback error:', error);
+  });
+}
+
+// Helper: Start previous track playback in background
+async function startPrevTrack(
+  guildId: string,
+  session: ReturnType<typeof discordSessions.get>,
+  prevTrack: NonNullable<ReturnType<typeof discordSessions.get>>['currentTrack']
+): Promise<void> {
+  if (!session || !prevTrack) return;
 
   try {
     // Stop current playback (suppress auto-advance since we already moved)
@@ -99,33 +125,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await apiClient.play(guildId, prevTrack.url, 'opus', undefined, prevTrack.duration);
     await readyPromise;
 
-    // Clear suppress flag after new track is ready (prevents leak to next natural finish)
+    // Clear suppress flag
     session.suppressAutoAdvanceFor.delete(guildId);
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
-    const success = voiceManager.playStream(guildId, audioStream);
-    if (!success) {
-      await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
-      return;
-    }
+    voiceManager.playStream(guildId, audioStream);
 
-    const embed = new EmbedBuilder()
-      .setColor(0x57F287) // Green
-      .setTitle('Now Playing')
-      .setDescription(`Now playing: **${prevTrack.title}**`)
-      .setThumbnail(prevTrack.thumbnail || null)
-      .addFields({
-        name: 'Duration',
-        value: formatDuration(prevTrack.duration),
-        inline: true,
-      });
-
-    await interaction.editReply({ embeds: [embed] });
+    // Track playback start time
+    session.playbackStartAt = Date.now();
+    session.seekOffset = 0;
   } catch (error) {
-    console.error('[Previous] Error:', error);
-    await interaction.editReply({
-      content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    });
+    console.error('[Previous] Error starting track:', error);
+    session.suppressAutoAdvanceFor.delete(guildId);
   } finally {
     session.isTransitioning = false;
   }

@@ -91,7 +91,32 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   // Lock transition BEFORE any async operation
   session.isTransitioning = true;
 
-  await interaction.deferReply();
+  // Show embed immediately (fast response to user)
+  const embed = new EmbedBuilder()
+    .setColor(0x57F287) // Green
+    .setTitle('Now Playing')
+    .setDescription(track.title)
+    .setThumbnail(track.thumbnail || null)
+    .addFields(
+      { name: 'Duration', value: formatDuration(track.duration), inline: true },
+      { name: 'Position', value: `#${position} of ${queue.length}`, inline: true }
+    );
+
+  await interaction.reply({ embeds: [embed] });
+
+  // Start playback in background (don't block UI)
+  startJumpTrack(guildId, session, track).catch((error) => {
+    console.error('[Jump] Background playback error:', error);
+  });
+}
+
+// Helper: Start jumped track playback in background
+async function startJumpTrack(
+  guildId: string,
+  session: ReturnType<typeof discordSessions.get>,
+  track: NonNullable<ReturnType<typeof discordSessions.get>>['currentTrack']
+): Promise<void> {
+  if (!session || !track) return;
 
   try {
     // Stop current playback (suppress auto-advance since we set the index manually)
@@ -129,32 +154,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
     await readyPromise;
 
-    // Clear suppress flag after new track is ready (prevents leak to next natural finish)
+    // Clear suppress flag
     session.suppressAutoAdvanceFor.delete(guildId);
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
-    const success = voiceManager.playStream(guildId, audioStream);
-    if (!success) {
-      await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
-      return;
-    }
+    voiceManager.playStream(guildId, audioStream);
 
-    const embed = new EmbedBuilder()
-      .setColor(0x57F287) // Green
-      .setTitle('Now Playing')
-      .setDescription(track.title)
-      .setThumbnail(track.thumbnail || null)
-      .addFields(
-        { name: 'Duration', value: formatDuration(track.duration), inline: true },
-        { name: 'Position', value: `#${position} of ${queue.length}`, inline: true }
-      );
-
-    await interaction.editReply({ embeds: [embed] });
+    // Track playback start time
+    session.playbackStartAt = Date.now();
+    session.seekOffset = 0;
   } catch (error) {
-    console.error('[Jump] Error:', error);
-    await interaction.editReply({
-      content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    });
+    console.error('[Jump] Error starting track:', error);
+    session.suppressAutoAdvanceFor.delete(guildId);
   } finally {
     session.isTransitioning = false;
   }

@@ -61,7 +61,33 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   // Lock transition BEFORE any async operation (prevents race with concurrent commands)
   session.isTransitioning = true;
 
-  await interaction.deferReply();
+  // Show embed immediately (fast response to user)
+  const embed = new EmbedBuilder()
+    .setColor(0x57F287) // Green
+    .setTitle('Now Playing')
+    .setDescription(nextTrack.title)
+    .setThumbnail(nextTrack.thumbnail || null)
+    .addFields({
+      name: 'Duration',
+      value: formatDuration(nextTrack.duration),
+      inline: true,
+    });
+
+  await interaction.reply({ embeds: [embed] });
+
+  // Start playback in background (don't block UI)
+  startNextTrack(guildId, session, nextTrack).catch((error) => {
+    console.error('[Next] Background playback error:', error);
+  });
+}
+
+// Helper: Start next track playback in background
+async function startNextTrack(
+  guildId: string,
+  session: ReturnType<typeof discordSessions.get>,
+  nextTrack: NonNullable<ReturnType<typeof discordSessions.get>>['currentTrack']
+): Promise<void> {
+  if (!session || !nextTrack) return;
 
   try {
     // Stop current playback (suppress auto-advance since we already advanced)
@@ -75,7 +101,6 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     session.isPaused = false;
 
     // Start Go playback first, wait for 'ready' event, then create Discord stream
-    // This avoids Discord closing empty stream while waiting for yt-dlp
     const readyPromise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         socketClient.off('event', handler);
@@ -104,36 +129,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await readyPromise;
     console.log(`[Next] Go is ready, creating stream for Discord`);
 
-    // Clear suppress flag - by now any finished event for the old track has been
-    // processed (Go socket is in-order). If the old track already finished naturally
-    // before /next was called, Go won't send another finished event, so the flag
-    // would leak and block the NEXT track's auto-advance.
+    // Clear suppress flag
     session.suppressAutoAdvanceFor.delete(guildId);
 
     const audioStream = socketClient.createDirectStreamForSession(guildId);
-    const success = voiceManager.playStream(guildId, audioStream);
-    if (!success) {
-      await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
-      return;
-    }
+    voiceManager.playStream(guildId, audioStream);
 
-    const embed = new EmbedBuilder()
-      .setColor(0x57F287) // Green
-      .setTitle('Now Playing')
-      .setDescription(nextTrack.title)
-      .setThumbnail(nextTrack.thumbnail || null)
-      .addFields({
-        name: 'Duration',
-        value: formatDuration(nextTrack.duration),
-        inline: true,
-      });
-
-    await interaction.editReply({ embeds: [embed] });
+    // Track playback start time
+    session.playbackStartAt = Date.now();
+    session.seekOffset = 0;
   } catch (error) {
-    console.error('[Next] Error:', error);
-    await interaction.editReply({
-      content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    });
+    console.error('[Next] Error starting track:', error);
+    session.suppressAutoAdvanceFor.delete(guildId);
   } finally {
     session.isTransitioning = false;
   }
