@@ -10,6 +10,7 @@ import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
+import { isSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
 
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
@@ -125,8 +126,25 @@ async function startJumpTrack(
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
+    // Lazy Spotify resolution
+    let resolvedTrack = track;
+    if (isSpotifySearchUrl(resolvedTrack.url)) {
+      console.log(`[Jump] Resolving Spotify track: ${resolvedTrack.title}`);
+      const resolved = await resolveSpotifySearch(resolvedTrack.url);
+      if (!resolved) {
+        console.error(`[Jump] Failed to resolve Spotify track: ${resolvedTrack.title}`);
+        return;
+      }
+      const idx = session.queueManager.getCurrentIndex();
+      if (idx >= 0) {
+        session.queueManager.updateTrack(idx, { url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || resolvedTrack.duration });
+      }
+      resolvedTrack = { ...resolvedTrack, url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || resolvedTrack.duration };
+      console.log(`[Jump] Resolved to: ${resolved.url}`);
+    }
+
     // Start target track
-    session.currentTrack = track;
+    session.currentTrack = resolvedTrack;
     session.isPaused = false;
 
     // Start Go playback first, wait for 'ready' event, then create Discord stream
@@ -151,7 +169,7 @@ async function startJumpTrack(
       socketClient.on('event', handler);
     });
 
-    await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
+    await apiClient.play(guildId, resolvedTrack.url, 'opus', undefined, resolvedTrack.duration);
     await readyPromise;
 
     // Clear suppress flag

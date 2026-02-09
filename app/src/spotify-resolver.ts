@@ -1,5 +1,10 @@
 // Spotify URL resolver - resolves Spotify tracks/playlists/albums to YouTube URLs
 // Used by both web playground (websocket.ts) and Discord bot (play.ts)
+//
+// Strategy: Lazy resolution
+// 1. getSpotifyTracks() fetches metadata instantly from Spotify embed page
+// 2. Tracks are added to queue with "spotify:search:..." placeholder URLs
+// 3. resolveSpotifySearch() resolves a single track to YouTube just before playback
 
 import * as YouTubeSearch from 'youtube-search-api';
 
@@ -8,6 +13,12 @@ export interface ResolvedTrack {
   title: string;
   duration: number;
   thumbnail: string;
+}
+
+export interface SpotifyTrackInfo {
+  title: string;
+  artist: string;
+  durationMs: number;
 }
 
 interface SpotifyOEmbed {
@@ -19,10 +30,12 @@ interface SpotifyOEmbed {
 interface SpotifyEmbedTrack {
   uri: string;
   title: string;
-  subtitle: string; // artist
-  duration: number; // milliseconds
+  subtitle: string;
+  duration: number;
   isPlayable: boolean;
 }
+
+export const SPOTIFY_SEARCH_PREFIX = 'spotify:search:';
 
 function parseDuration(durationStr: string): number {
   if (!durationStr) return 0;
@@ -36,58 +49,86 @@ export function isSpotifyUrl(url: string): boolean {
   return /^https?:\/\/(open\.)?spotify\.com\/(track|playlist|album|intl-[a-z]+\/)/.test(url);
 }
 
+export function isSpotifySearchUrl(url: string): boolean {
+  return url.startsWith(SPOTIFY_SEARCH_PREFIX);
+}
+
 export function getSpotifyType(url: string): 'track' | 'playlist' | 'album' | null {
   const match = url.match(/spotify\.com\/(?:intl-[a-z]+\/)?(track|playlist|album)\//);
   return match ? (match[1] as 'track' | 'playlist' | 'album') : null;
 }
 
-// Extract the Spotify resource path (e.g. "playlist/37i9dQZF1DXcBWIGoYBM5M")
 function getSpotifyEmbedPath(url: string): string | null {
   const match = url.match(/spotify\.com\/(?:intl-[a-z]+\/)?(track|playlist|album)\/([a-zA-Z0-9]+)/);
   return match ? `${match[1]}/${match[2]}` : null;
 }
 
-// Fetch Spotify oEmbed data (public, no auth needed)
-async function fetchOEmbed(spotifyUrl: string): Promise<SpotifyOEmbed | null> {
-  try {
-    const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`;
-    const response = await fetch(oembedUrl);
-    if (!response.ok) return null;
-    return (await response.json()) as SpotifyOEmbed;
-  } catch {
-    return null;
-  }
+// Build a placeholder URL for queue storage
+export function buildSpotifySearchUrl(title: string, artist: string): string {
+  const query = artist ? `${title} ${artist}` : title;
+  return `${SPOTIFY_SEARCH_PREFIX}${query}`;
 }
 
-// Fetch track list from Spotify embed page (__NEXT_DATA__ JSON)
-async function fetchSpotifyEmbedTracks(spotifyUrl: string): Promise<SpotifyEmbedTrack[]> {
+// Fetch Spotify track metadata — fast, no YouTube resolution
+// Single track: uses oEmbed (~200ms)
+// Playlist/album: uses embed page __NEXT_DATA__ (~300ms)
+export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrackInfo[]> {
+  const type = getSpotifyType(spotifyUrl);
+  if (!type) return [];
+
+  if (type === 'track') {
+    try {
+      const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`;
+      const response = await fetch(oembedUrl);
+      if (!response.ok) return [];
+      const data = (await response.json()) as SpotifyOEmbed;
+      if (!data?.title) return [];
+      // oEmbed title is "Track Name - Artist"
+      return [{ title: data.title, artist: '', durationMs: 0 }];
+    } catch {
+      return [];
+    }
+  }
+
+  // Playlist or album: scrape embed page
   const embedPath = getSpotifyEmbedPath(spotifyUrl);
   if (!embedPath) return [];
 
-  const embedUrl = `https://open.spotify.com/embed/${embedPath}`;
-  const response = await fetch(embedUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-  if (!response.ok) return [];
-
-  const html = await response.text();
-  const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
-  if (!scriptMatch) return [];
-
   try {
-    const data = JSON.parse(scriptMatch[1]);
-    const trackList = data?.props?.pageProps?.state?.data?.entity?.trackList;
-    if (Array.isArray(trackList)) {
-      return trackList.filter((t: SpotifyEmbedTrack) => t.isPlayable && t.title);
-    }
+    const response = await fetch(`https://open.spotify.com/embed/${embedPath}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (!response.ok) return [];
+
+    const html = await response.text();
+    const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+    if (!scriptMatch) return [];
+
+    const json = JSON.parse(scriptMatch[1]);
+    const trackList = json?.props?.pageProps?.state?.data?.entity?.trackList;
+    if (!Array.isArray(trackList)) return [];
+
+    return trackList
+      .filter((t: SpotifyEmbedTrack) => t.isPlayable && t.title)
+      .map((t: SpotifyEmbedTrack) => ({
+        title: t.title,
+        artist: t.subtitle || '',
+        durationMs: t.duration || 0,
+      }));
   } catch {
-    // JSON parse failed
+    return [];
   }
-  return [];
 }
 
-// Search YouTube and return best match
-async function searchYouTube(query: string): Promise<ResolvedTrack | null> {
+// Resolve a single spotify:search: URL to a YouTube track
+// Called just before playback — ~500ms for one YouTube search
+export async function resolveSpotifySearch(searchUrl: string): Promise<ResolvedTrack | null> {
+  if (!searchUrl.startsWith(SPOTIFY_SEARCH_PREFIX)) return null;
+  const query = searchUrl.slice(SPOTIFY_SEARCH_PREFIX.length);
+  if (!query) return null;
+
+  console.log(`[Spotify] Resolving: "${query}"`);
+
   try {
     const results = await YouTubeSearch.GetListByKeyword(query, false, 5);
     const items = results?.items as
@@ -110,82 +151,4 @@ async function searchYouTube(query: string): Promise<ResolvedTrack | null> {
   } catch {
     return null;
   }
-}
-
-// Resolve a single Spotify track → YouTube URL via oEmbed
-async function resolveTrack(spotifyUrl: string): Promise<ResolvedTrack | null> {
-  const oembed = await fetchOEmbed(spotifyUrl);
-  if (!oembed?.title) return null;
-
-  // oEmbed title format: "Track Name - Artist"
-  const searchQuery = oembed.title;
-  console.log(`[Spotify] Resolving track: "${searchQuery}"`);
-
-  return searchYouTube(searchQuery);
-}
-
-// Resolve Spotify playlist/album → array of YouTube tracks
-// Uses the Spotify embed page to get track list (no auth required)
-async function resolvePlaylist(
-  spotifyUrl: string,
-  onProgress?: (resolved: number, total: number) => void,
-): Promise<ResolvedTrack[]> {
-  console.log(`[Spotify] Extracting playlist tracks from embed page...`);
-
-  let spotifyTracks: SpotifyEmbedTrack[];
-  try {
-    spotifyTracks = await fetchSpotifyEmbedTracks(spotifyUrl);
-  } catch (err) {
-    console.error(`[Spotify] Embed extraction failed:`, err);
-    return [];
-  }
-
-  if (spotifyTracks.length === 0) {
-    console.log(`[Spotify] No tracks found in playlist`);
-    return [];
-  }
-
-  console.log(`[Spotify] Found ${spotifyTracks.length} tracks, searching YouTube...`);
-
-  // Search YouTube for each track with concurrency limit
-  const CONCURRENCY = 3;
-  const resolved: ResolvedTrack[] = [];
-  let completed = 0;
-
-  for (let i = 0; i < spotifyTracks.length; i += CONCURRENCY) {
-    const batch = spotifyTracks.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(
-      batch.map((t) => {
-        const query = t.subtitle ? `${t.title} ${t.subtitle}` : t.title;
-        return searchYouTube(query);
-      }),
-    );
-
-    for (const result of results) {
-      if (result) resolved.push(result);
-    }
-
-    completed += batch.length;
-    onProgress?.(completed, spotifyTracks.length);
-  }
-
-  console.log(`[Spotify] Resolved ${resolved.length}/${spotifyTracks.length} tracks`);
-  return resolved;
-}
-
-// Main entry: resolve any Spotify URL to YouTube track(s)
-export async function resolveSpotifyUrl(
-  url: string,
-  onProgress?: (resolved: number, total: number) => void,
-): Promise<ResolvedTrack[]> {
-  const type = getSpotifyType(url);
-  if (!type) return [];
-
-  if (type === 'track') {
-    const track = await resolveTrack(url);
-    return track ? [track] : [];
-  }
-
-  // playlist or album
-  return resolvePlaylist(url, onProgress);
 }

@@ -16,7 +16,7 @@ import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
 import { Track } from '../queue-manager';
 import * as YouTubeSearch from 'youtube-search-api';
-import { isSpotifyUrl, resolveSpotifyUrl } from '../spotify-resolver';
+import { isSpotifyUrl, isSpotifySearchUrl, getSpotifyTracks, buildSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
 
 interface YouTubeSearchItem {
   id: string;
@@ -266,6 +266,27 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
     return;
   }
 
+  // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
+  if (isSpotifySearchUrl(track.url)) {
+    console.log(`[Play] Resolving Spotify track: ${track.title}`);
+    const resolved = await resolveSpotifySearch(track.url);
+    if (!resolved) {
+      console.error(`[Play] Failed to resolve Spotify track: ${track.title}`);
+      return;
+    }
+    // Update the track in queue so it won't need resolving again
+    const currentIndex = session.queueManager.getCurrentIndex();
+    if (currentIndex >= 0) {
+      session.queueManager.updateTrack(currentIndex, {
+        url: resolved.url,
+        thumbnail: resolved.thumbnail,
+        duration: resolved.duration || track.duration,
+      });
+    }
+    track = { ...track, url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || track.duration };
+    console.log(`[Play] Resolved to: ${resolved.url}`);
+  }
+
   session.currentTrack = track;
   session.isPaused = false;
 
@@ -441,25 +462,29 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     discordClient = interaction.client;
     session.textChannelId = interaction.channelId;
 
-    // Handle Spotify URLs → resolve to YouTube
+    // Handle Spotify URLs → load metadata instantly, resolve to YouTube on play
     if (isSpotifyUrl(query)) {
-      await interaction.editReply('Resolving Spotify...');
+      const spotifyTracks = await getSpotifyTracks(query);
 
-      const tracks = await resolveSpotifyUrl(query, (done, total) => {
-        interaction.editReply(`Resolving Spotify tracks: ${done}/${total}...`).catch(() => {});
-      });
-
-      if (tracks.length === 0) {
-        await interaction.editReply('Could not resolve Spotify URL.');
+      if (spotifyTracks.length === 0) {
+        await interaction.editReply('Could not load Spotify URL.');
         return;
       }
 
-      for (const track of tracks) {
-        session.queueManager.addTrack(track.url, track.title, track.duration, track.thumbnail);
+      // Add all tracks instantly with spotify:search: placeholder URLs
+      for (const t of spotifyTracks) {
+        const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
+        session.queueManager.addTrack(
+          buildSpotifySearchUrl(t.title, t.artist),
+          displayTitle,
+          Math.round(t.durationMs / 1000),
+        );
       }
 
-      if (tracks.length === 1) {
-        // Single track
+      if (spotifyTracks.length === 1) {
+        const t = spotifyTracks[0];
+        const displayTitle = t.artist ? `${t.title} - ${t.artist}` : t.title;
+
         if (!wasPlaying) {
           const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
           if (track) {
@@ -467,13 +492,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
             voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
 
             const embed = new EmbedBuilder()
-              .setColor(0x1DB954) // Spotify green
+              .setColor(0x1DB954)
               .setTitle('Now Playing (from Spotify)')
-              .setDescription(track.title)
-              .setThumbnail(track.thumbnail || null)
+              .setDescription(displayTitle)
               .addFields({
                 name: 'Duration',
-                value: formatDuration(track.duration),
+                value: formatDuration(Math.round(t.durationMs / 1000)),
                 inline: true,
               });
 
@@ -482,14 +506,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           }
         } else {
           const queuePos = session.queueManager.getQueue().length;
-          const t = tracks[0];
           const embed = new EmbedBuilder()
             .setColor(0x1DB954)
             .setTitle('Added to Queue (from Spotify)')
-            .setDescription(`**${t.title}**`)
-            .setThumbnail(t.thumbnail || null)
+            .setDescription(`**${displayTitle}**`)
             .addFields(
-              { name: 'Duration', value: formatDuration(t.duration), inline: true },
+              { name: 'Duration', value: formatDuration(Math.round(t.durationMs / 1000)), inline: true },
               { name: 'Position in Queue', value: `#${queuePos}`, inline: true },
             );
           await interaction.editReply({ content: '', embeds: [embed] });
@@ -499,7 +521,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         const embed = new EmbedBuilder()
           .setColor(0x1DB954)
           .setTitle('Spotify Playlist Added')
-          .setDescription(`Added **${tracks.length}** tracks to the queue`)
+          .setDescription(`Added **${spotifyTracks.length}** tracks to the queue`)
           .addFields({
             name: 'Queue Size',
             value: `${session.queueManager.getQueue().length} tracks`,
@@ -507,13 +529,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           });
 
         if (!wasPlaying) {
-          const firstTrack = session.queueManager.startPlaying(
-            session.queueManager.getQueue().length - tracks.length,
-          );
+          const startIdx = session.queueManager.getQueue().length - spotifyTracks.length;
+          const firstTrack = session.queueManager.startPlaying(startIdx);
           if (firstTrack) {
             const voiceChannel = member.voice.channel;
             voiceManager.join(guildId, voiceChannel.id, voiceChannel.guild.voiceAdapterCreator);
-            await playTrack(guildId, firstTrack);
+            playTrack(guildId, firstTrack);
             embed.addFields({
               name: 'Now Playing',
               value: firstTrack.title,

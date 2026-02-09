@@ -32,6 +32,13 @@ export class QueueManager extends EventEmitter {
     this.emitUpdate();
   }
 
+  // Update a track in-place (e.g. after resolving spotify:search: → YouTube URL)
+  updateTrack(index: number, updates: Partial<Pick<Track, 'url' | 'title' | 'duration' | 'thumbnail'>>): void {
+    if (index < 0 || index >= this.queue.length) return;
+    Object.assign(this.queue[index], updates);
+    this.emitUpdate();
+  }
+
   removeTrack(index: number): boolean {
     if (index < 0 || index >= this.queue.length) {
       return false;

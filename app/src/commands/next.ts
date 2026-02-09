@@ -10,6 +10,7 @@ import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
+import { isSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
 
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
@@ -96,8 +97,25 @@ async function startNextTrack(
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
 
+    // Lazy Spotify resolution
+    let track = nextTrack;
+    if (isSpotifySearchUrl(track.url)) {
+      console.log(`[Next] Resolving Spotify track: ${track.title}`);
+      const resolved = await resolveSpotifySearch(track.url);
+      if (!resolved) {
+        console.error(`[Next] Failed to resolve Spotify track: ${track.title}`);
+        return;
+      }
+      const idx = session.queueManager.getCurrentIndex();
+      if (idx >= 0) {
+        session.queueManager.updateTrack(idx, { url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || track.duration });
+      }
+      track = { ...track, url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || track.duration };
+      console.log(`[Next] Resolved to: ${resolved.url}`);
+    }
+
     // Start next track
-    session.currentTrack = nextTrack;
+    session.currentTrack = track;
     session.isPaused = false;
 
     // Start Go playback first, wait for 'ready' event, then create Discord stream
@@ -123,7 +141,7 @@ async function startNextTrack(
     });
 
     console.log(`[Next] Calling apiClient.play`);
-    await apiClient.play(guildId, nextTrack.url, 'opus', undefined, nextTrack.duration);
+    await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
 
     // Wait for Go to be ready
     await readyPromise;

@@ -10,6 +10,7 @@ import { voiceManager } from '../voice/manager';
 import { ApiClient } from '../api-client';
 import { SocketClient } from '../socket-client';
 import { discordSessions } from '../discord/session-store';
+import { isSpotifySearchUrl, resolveSpotifySearch } from '../spotify-resolver';
 
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
@@ -138,8 +139,24 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       socketClient.on('event', handler);
     });
 
+    // Lazy Spotify resolution (should already be resolved, but just in case)
+    let playUrl = track.url;
+    let playDuration = track.duration;
+    if (isSpotifySearchUrl(playUrl)) {
+      const resolved = await resolveSpotifySearch(playUrl);
+      if (!resolved) {
+        throw new Error('Could not find this track on YouTube');
+      }
+      const idx = session.queueManager.getCurrentIndex();
+      if (idx >= 0) {
+        session.queueManager.updateTrack(idx, { url: resolved.url, thumbnail: resolved.thumbnail, duration: resolved.duration || playDuration });
+      }
+      playUrl = resolved.url;
+      playDuration = resolved.duration || playDuration;
+    }
+
     console.log(`[Seek] Seeking to ${seekSeconds}s in: ${track.title}`);
-    await apiClient.play(guildId, track.url, 'opus', seekSeconds, track.duration);
+    await apiClient.play(guildId, playUrl, 'opus', seekSeconds, playDuration);
 
     await readyPromise;
     console.log(`[Seek] Go is ready, creating stream for Discord`);
