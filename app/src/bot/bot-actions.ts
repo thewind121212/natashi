@@ -162,11 +162,11 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Send "Now Playing" embed to the guild's text channel
-async function sendNowPlayingEmbed(session: GuildSession, track: Track): Promise<void> {
-  if (!discordClient || !session.textChannelId) return;
+// Send "Now Playing" embed to a specific Discord text channel
+async function sendNowPlayingEmbed(channelId: string | undefined, track: Track): Promise<void> {
+  if (!discordClient || !channelId) return;
   try {
-    const channel = await discordClient.channels.fetch(session.textChannelId);
+    const channel = await discordClient.channels.fetch(channelId);
     if (channel && channel.isTextBased()) {
       const embed = new EmbedBuilder()
         .setColor(0x57F287) // Green
@@ -236,8 +236,13 @@ function waitForReady(guildId: string): Promise<void> {
   });
 }
 
+interface StartTrackOptions {
+  startAt?: number;
+  channelId?: string;
+}
+
 // Shared helper: stop current → start new track → wait ready → play stream
-async function startTrackOnGuild(guildId: string, session: GuildSession, track: Track, startAt?: number): Promise<BotActionResult> {
+async function startTrackOnGuild(guildId: string, session: GuildSession, track: Track, opts: StartTrackOptions = {}): Promise<BotActionResult> {
   session.suppressAutoAdvanceFor.add(guildId);
 
   try {
@@ -255,7 +260,7 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
         session.suppressAutoAdvanceFor.delete(guildId);
         const nextTrack = session.queueManager.skip();
         if (nextTrack) {
-          return startTrackOnGuild(guildId, session, nextTrack);
+          return startTrackOnGuild(guildId, session, nextTrack, opts);
         }
         return { success: false, error: 'Could not find this track on YouTube' };
       }
@@ -274,7 +279,7 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     session.currentTrack = track;
     session.isPaused = false;
 
-    await apiClient.play(guildId, track.url, 'opus', startAt, track.duration);
+    await apiClient.play(guildId, track.url, 'opus', opts.startAt, track.duration);
     await waitForReady(guildId);
 
     // Clear suppress flag after new track is ready. By now any finished event for
@@ -291,11 +296,11 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     }
 
     session.playbackStartAt = Date.now();
-    session.seekOffset = startAt || 0;
+    session.seekOffset = opts.startAt || 0;
 
     // Send "Now Playing" embed to Discord channel (skip for seek — same track)
-    if (!startAt) {
-      sendNowPlayingEmbed(session, track).catch(() => {});
+    if (!opts.startAt) {
+      sendNowPlayingEmbed(opts.channelId, track).catch(() => {});
     }
 
     return { success: true, data: { title: track.title, duration: track.duration } };
@@ -350,7 +355,7 @@ export async function botResume(guildId: string): Promise<BotActionResult> {
   }
 }
 
-export async function botSkip(guildId: string): Promise<BotActionResult> {
+export async function botSkip(guildId: string, channelId?: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
@@ -366,7 +371,7 @@ export async function botSkip(guildId: string): Promise<BotActionResult> {
 
   session.isTransitioning = true;
   try {
-    const result = await startTrackOnGuild(guildId, session, nextTrack);
+    const result = await startTrackOnGuild(guildId, session, nextTrack, { channelId });
     return result;
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -375,7 +380,7 @@ export async function botSkip(guildId: string): Promise<BotActionResult> {
   }
 }
 
-export async function botPrevious(guildId: string): Promise<BotActionResult> {
+export async function botPrevious(guildId: string, channelId?: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
@@ -391,7 +396,7 @@ export async function botPrevious(guildId: string): Promise<BotActionResult> {
 
   session.isTransitioning = true;
   try {
-    const result = await startTrackOnGuild(guildId, session, prevTrack);
+    const result = await startTrackOnGuild(guildId, session, prevTrack, { channelId });
     return result;
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -400,7 +405,7 @@ export async function botPrevious(guildId: string): Promise<BotActionResult> {
   }
 }
 
-export async function botSeek(guildId: string, positionSec: number): Promise<BotActionResult> {
+export async function botSeek(guildId: string, positionSec: number, channelId?: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session || !session.currentTrack || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
@@ -417,7 +422,7 @@ export async function botSeek(guildId: string, positionSec: number): Promise<Bot
 
   session.isTransitioning = true;
   try {
-    const result = await startTrackOnGuild(guildId, session, session.currentTrack, positionSec);
+    const result = await startTrackOnGuild(guildId, session, session.currentTrack, { startAt: positionSec, channelId });
     return result;
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -426,7 +431,7 @@ export async function botSeek(guildId: string, positionSec: number): Promise<Bot
   }
 }
 
-export async function botJump(guildId: string, index: number): Promise<BotActionResult> {
+export async function botJump(guildId: string, index: number, channelId?: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
@@ -450,7 +455,7 @@ export async function botJump(guildId: string, index: number): Promise<BotAction
 
   session.isTransitioning = true;
   try {
-    const result = await startTrackOnGuild(guildId, session, track);
+    const result = await startTrackOnGuild(guildId, session, track, { channelId });
     return result;
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -482,7 +487,7 @@ function isPlaylistUrl(url: string): boolean {
     && !(listMatch && listMatch[1].startsWith('RD'));
 }
 
-export async function botPlay(guildId: string, url: string): Promise<BotActionResult> {
+export async function botPlay(guildId: string, url: string, channelId?: string): Promise<BotActionResult> {
   const session = discordSessions.get(guildId);
   if (!session) {
     return { success: false, error: 'No active session for this guild. Use a Discord command to start.' };
@@ -515,7 +520,7 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
         const startIdx = session.queueManager.getQueue().length - spotifyTracks.length;
         const firstTrack = session.queueManager.startPlaying(startIdx);
         if (firstTrack) {
-          const result = await startTrackOnGuild(guildId, session, firstTrack);
+          const result = await startTrackOnGuild(guildId, session, firstTrack, { channelId });
           return { ...result, data: { ...result.data, count: spotifyTracks.length, spotify: true } };
         }
       }
@@ -541,7 +546,7 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
       if (!wasPlaying) {
         const firstTrack = session.queueManager.startPlaying(0);
         if (firstTrack) {
-          const result = await startTrackOnGuild(guildId, session, firstTrack);
+          const result = await startTrackOnGuild(guildId, session, firstTrack, { channelId });
           return { ...result, data: { ...result.data, count: playlist.count, playlist: true } };
         }
       }
@@ -560,7 +565,7 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
     if (!wasPlaying) {
       const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
       if (track) {
-        const result = await startTrackOnGuild(guildId, session, track);
+        const result = await startTrackOnGuild(guildId, session, track, { channelId });
         return result;
       }
     }

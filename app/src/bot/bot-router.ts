@@ -92,7 +92,8 @@ export function createBotRouter(getClient: () => Client | null): Router {
       res.status(400).json({ success: false, error: 'url is required' });
       return;
     }
-    const result = await botPlay(req.params.guildId, url);
+    const { channelId } = req.body;
+    const result = await botPlay(req.params.guildId, url, channelId);
     res.status(result.success ? 200 : 400).json(result);
   });
 
@@ -107,12 +108,14 @@ export function createBotRouter(getClient: () => Client | null): Router {
   });
 
   router.post('/guild/:guildId/skip', async (req: Request, res: Response) => {
-    const result = await botSkip(req.params.guildId);
+    const { channelId } = req.body;
+    const result = await botSkip(req.params.guildId, channelId);
     res.status(result.success ? 200 : 400).json(result);
   });
 
   router.post('/guild/:guildId/previous', async (req: Request, res: Response) => {
-    const result = await botPrevious(req.params.guildId);
+    const { channelId } = req.body;
+    const result = await botPrevious(req.params.guildId, channelId);
     res.status(result.success ? 200 : 400).json(result);
   });
 
@@ -122,7 +125,8 @@ export function createBotRouter(getClient: () => Client | null): Router {
       res.status(400).json({ success: false, error: 'position (number, seconds) is required' });
       return;
     }
-    const result = await botSeek(req.params.guildId, position);
+    const { channelId } = req.body;
+    const result = await botSeek(req.params.guildId, position, channelId);
     res.status(result.success ? 200 : 400).json(result);
   });
 
@@ -132,7 +136,8 @@ export function createBotRouter(getClient: () => Client | null): Router {
       res.status(400).json({ success: false, error: 'index (number, 0-based) is required' });
       return;
     }
-    const result = await botJump(req.params.guildId, index);
+    const { channelId } = req.body;
+    const result = await botJump(req.params.guildId, index, channelId);
     res.status(result.success ? 200 : 400).json(result);
   });
 
