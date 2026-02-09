@@ -110,20 +110,33 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
     const trackList = entity?.trackList;
     if (!Array.isArray(trackList)) return [];
 
-    // Extract cover art: visualIdentity has multiple resolutions, pick largest
-    const viImages = entity?.visualIdentity?.image as Array<{ url: string; width: number; height: number }> | undefined;
-    const coverArtUrl = entity?.coverArt?.sources?.[0]?.url as string | undefined;
-    const bestImage = viImages?.reduce((best, img) => (img.width > best.width ? img : best), viImages[0]);
-    const thumbnail = bestImage?.url || coverArtUrl || '';
-
-    return trackList
+    const tracks = trackList
       .filter((t: SpotifyEmbedTrack) => t.isPlayable && t.title)
       .map((t: SpotifyEmbedTrack) => ({
         title: t.title,
         artist: t.subtitle || '',
         durationMs: t.duration || 0,
-        thumbnail,
+        thumbnail: '',
+        _spotifyId: t.uri?.split(':').pop() || '',
       }));
+
+    // Batch-fetch per-track album art via oEmbed (parallel)
+    const thumbResults = await Promise.allSettled(
+      tracks.map((t) =>
+        t._spotifyId
+          ? fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/track/${t._spotifyId}`)
+              .then((r) => r.json())
+              .then((d) => (d as SpotifyOEmbed).thumbnail_url || '')
+          : Promise.resolve(''),
+      ),
+    );
+    for (let i = 0; i < tracks.length; i++) {
+      const r = thumbResults[i];
+      tracks[i].thumbnail = r.status === 'fulfilled' ? r.value : '';
+      delete (tracks[i] as Record<string, unknown>)._spotifyId;
+    }
+
+    return tracks as SpotifyTrackInfo[];
   } catch {
     return [];
   }
