@@ -39,6 +39,58 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
+// Extract playlist ID from YouTube URL
+function extractPlaylistId(url: string): string | null {
+  const match = url.match(/[?&]list=([^&]+)/);
+  return match ? match[1] : null;
+}
+
+interface PlaylistEntry {
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail: string;
+}
+
+interface PlaylistResult {
+  entries: PlaylistEntry[];
+  count: number;
+  error?: string;
+}
+
+// Get playlist data using youtube-search-api (much faster than yt-dlp)
+async function getFastPlaylist(url: string): Promise<PlaylistResult> {
+  const playlistId = extractPlaylistId(url);
+  if (!playlistId) {
+    return { entries: [], count: 0, error: 'Invalid playlist URL' };
+  }
+
+  try {
+    // GetPlaylistData returns playlist info with video items
+    const data = await YouTubeSearch.GetPlaylistData(playlistId, 200);
+    if (!data?.items?.length) {
+      return { entries: [], count: 0, error: 'Playlist is empty or not found' };
+    }
+
+    const entries: PlaylistEntry[] = [];
+    for (const item of data.items) {
+      if (item.id) {
+        entries.push({
+          url: `https://www.youtube.com/watch?v=${item.id}`,
+          title: item.title || 'Unknown',
+          duration: parseDuration(item.length?.simpleText || ''),
+          thumbnail: `https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`,
+        });
+      }
+    }
+
+    return { entries, count: entries.length };
+  } catch (error) {
+    console.error('[BotActions] Playlist extraction error:', error);
+    return { entries: [], count: 0, error: 'Failed to load playlist' };
+  }
+}
+
 // Get fast metadata using youtube-search-api (much faster than yt-dlp)
 async function getFastMetadata(url: string): Promise<FastMetadata | null> {
   const videoId = extractVideoId(url);
@@ -417,8 +469,8 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
     const wasPlaying = session.currentTrack !== null;
 
     if (isPlaylistUrl(url)) {
-      // Handle playlist — fetch all entries from Go API
-      const playlist = await apiClient.getPlaylist(url);
+      // Handle playlist using fast youtube-search-api (no yt-dlp)
+      const playlist = await getFastPlaylist(url);
       if (playlist.error) {
         return { success: false, error: playlist.error };
       }
