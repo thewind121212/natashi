@@ -19,6 +19,74 @@ interface YouTubeSearchItem {
   thumbnail?: { thumbnails?: { url: string }[] };
 }
 
+interface FastMetadata {
+  title: string;
+  duration: number;
+  thumbnail: string;
+  url: string;
+}
+
+// Extract video ID from YouTube URL
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/.*[?&]v=([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// Get fast metadata using youtube-search-api (much faster than yt-dlp)
+async function getFastMetadata(url: string): Promise<FastMetadata | null> {
+  const videoId = extractVideoId(url);
+  if (!videoId) return null;
+
+  try {
+    // Search by video ID to get metadata including duration
+    const searchResults = await YouTubeSearch.GetListByKeyword(videoId, false, 5);
+    const items = searchResults?.items as YouTubeSearchItem[] | undefined;
+
+    // Find the exact video match
+    const video = items?.find((item) => item.type === 'video' && item.id === videoId);
+
+    if (video) {
+      const thumbnail = video.thumbnail?.thumbnails?.length
+        ? video.thumbnail.thumbnails[video.thumbnail.thumbnails.length - 1].url
+        : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      return {
+        title: video.title || 'Unknown',
+        duration: parseDuration(video.length?.simpleText || ''),
+        thumbnail,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+      };
+    }
+
+    // Fallback: use first video result if exact match not found
+    const firstVideo = items?.find((item) => item.type === 'video');
+    if (firstVideo) {
+      return {
+        title: firstVideo.title || 'Unknown',
+        duration: parseDuration(firstVideo.length?.simpleText || ''),
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+      };
+    }
+
+    return null;
+  } catch {
+    // Fallback to basic thumbnail
+    return {
+      title: 'Loading...',
+      duration: 0,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+    };
+  }
+}
+
 const apiClient = new ApiClient();
 const socketClient = SocketClient.getSharedInstance();
 
@@ -374,13 +442,13 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
       return { success: true, data: { count: playlist.count, playlist: true, queued: wasPlaying } };
     }
 
-    // Single track
-    const metadata = await apiClient.getMetadata(url);
-    if (metadata.error) {
-      return { success: false, error: metadata.error };
-    }
+    // Single track - use fast metadata from youtube-search-api
+    const fastMeta = await getFastMetadata(url);
+    const title = fastMeta?.title || 'Unknown';
+    const duration = fastMeta?.duration || 0;
+    const thumbnail = fastMeta?.thumbnail || undefined;
 
-    session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
+    session.queueManager.addTrack(url, title, duration, thumbnail);
 
     if (!wasPlaying) {
       const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
@@ -390,7 +458,7 @@ export async function botPlay(guildId: string, url: string): Promise<BotActionRe
       }
     }
 
-    return { success: true, data: { title: metadata.title, queued: wasPlaying } };
+    return { success: true, data: { title, queued: wasPlaying } };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }

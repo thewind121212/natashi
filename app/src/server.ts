@@ -215,6 +215,12 @@ export function createServer(getDiscordClient: () => Client | null): Express {
   // === Bot Controller API ===
   app.use('/api/bot', createBotRouter(getDiscordClient));
 
+  // === SPA Catch-All Route ===
+  // Must be LAST - serves index.html for any non-API routes (React Router handles client-side)
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  });
+
   return app;
 }
 
