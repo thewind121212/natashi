@@ -337,6 +337,23 @@ export class SocketClient extends EventEmitter {
     }
   }
 
+  // Gracefully end stream for a session (signal no more data, but let Discord consume buffer)
+  // Use this for auto-advance to prevent cutting off remaining buffered audio.
+  // The stream will be cleaned up when the next track starts or when endAudioStreamForSession is called.
+  gracefulEndStreamForSession(sessionId: string): void {
+    const session = this.sessionStreams.get(sessionId);
+    if (session) {
+      // Just signal end of data - don't stop jitter buffer or delete from map yet
+      // Discord player will continue consuming buffered data until it goes Idle
+      if (!session.stream.writableEnded) {
+        console.log(`[SocketClient] Gracefully ending stream for session ${sessionId.slice(0, 8)}`);
+        session.stream.end();
+      }
+      // Note: Don't delete from map - cleanup happens when next track starts
+      // or when endAudioStreamForSession is called explicitly
+    }
+  }
+
   // End all audio streams (cleanup)
   endAllAudioStreams(): void {
     for (const [, session] of this.sessionStreams) {

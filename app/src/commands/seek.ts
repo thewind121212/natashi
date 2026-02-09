@@ -139,7 +139,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     });
 
     console.log(`[Seek] Seeking to ${seekSeconds}s in: ${track.title}`);
-    await apiClient.play(guildId, track.url, 'opus', seekSeconds);
+    await apiClient.play(guildId, track.url, 'opus', seekSeconds, track.duration);
 
     await readyPromise;
     console.log(`[Seek] Go is ready, creating stream for Discord`);

@@ -238,8 +238,8 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
     socketClient.on('event', handler);
   });
 
-  // Tell Go to start (this triggers yt-dlp extraction)
-  await apiClient.play(guildId, track.url, 'opus');
+  // Tell Go to start (pass duration to skip yt-dlp metadata call)
+  await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
 
   try {
     // Wait for Go to be ready (yt-dlp done, FFmpeg started)
@@ -306,6 +306,18 @@ function setupEventHandlers(): void {
       if (session.suppressAutoAdvanceFor.has(event.session_id)) {
         session.suppressAutoAdvanceFor.delete(event.session_id);
         console.log(`[Play] Auto-advance suppressed for ${event.session_id.slice(0, 8)}`);
+        return;
+      }
+
+      // Gracefully end stream and wait for Discord to consume remaining buffered audio
+      // This prevents cutting off the last few seconds of the track
+      socketClient.gracefulEndStreamForSession(event.session_id);
+      const safeToAdvance = await voiceManager.waitForIdle(event.session_id);
+
+      if (!safeToAdvance) {
+        // Player is still playing - don't advance yet, it will finish naturally
+        // and trigger another finished event or go idle on its own
+        console.log(`[Play] Not safe to advance yet for ${event.session_id.slice(0, 8)}, waiting for natural finish`);
         return;
       }
 

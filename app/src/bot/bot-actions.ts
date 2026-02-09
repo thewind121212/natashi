@@ -196,7 +196,7 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     session.currentTrack = track;
     session.isPaused = false;
 
-    await apiClient.play(guildId, track.url, 'opus', startAt);
+    await apiClient.play(guildId, track.url, 'opus', startAt, track.duration);
     await waitForReady(guildId);
 
     // Clear suppress flag after new track is ready. By now any finished event for

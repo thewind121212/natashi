@@ -118,7 +118,8 @@ func shortSessionID(id string) string {
 }
 
 // StartPlayback starts a new playback session (non-blocking).
-func (m *SessionManager) StartPlayback(id string, url string, formatStr string, startAtSec float64) error {
+// duration is optional (0 = unknown) - if provided, skips slow metadata extraction.
+func (m *SessionManager) StartPlayback(id string, url string, formatStr string, startAtSec float64, duration float64) error {
 	m.mu.Lock()
 
 	// Stop only the session with the same ID (if exists)
@@ -139,12 +140,13 @@ func (m *SessionManager) StartPlayback(id string, url string, formatStr string, 
 	}
 
 	session := &Session{
-		ID:       id,
-		State:    StateIdle,
-		URL:      url,
-		Format:   format,
-		StartAt:  startAtSec,
-		resumeCh: make(chan struct{}, 1),
+		ID:               id,
+		State:            StateIdle,
+		URL:              url,
+		Format:           format,
+		StartAt:          startAtSec,
+		expectedDuration: duration, // Use duration from Node.js (skips yt-dlp metadata call if > 0)
+		resumeCh:         make(chan struct{}, 1),
 	}
 	m.sessions[id] = session
 	m.mu.Unlock()
@@ -193,16 +195,19 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 	default:
 	}
 
-	// Get metadata for duration (only on first attempt, skip on retry to save time)
+	// Get metadata for duration (only if not provided by Node.js and not a retry)
+	// If duration was passed from Node.js, skip this slow yt-dlp call
 	if !isRetry && session.expectedDuration == 0 {
 		if ytExtractor, ok := extractor.(*youtube.Extractor); ok {
 			if meta, err := ytExtractor.ExtractMetadata(session.URL); err == nil && meta.Duration > 0 {
 				session.mu.Lock()
 				session.expectedDuration = float64(meta.Duration)
 				session.mu.Unlock()
-				fmt.Printf("[Session] Track duration: %.0fs\n", session.expectedDuration)
+				fmt.Printf("[Session] Track duration: %.0fs (from yt-dlp)\n", session.expectedDuration)
 			}
 		}
+	} else if session.expectedDuration > 0 {
+		fmt.Printf("[Session] Track duration: %.0fs (from Node.js, skipped yt-dlp)\n", session.expectedDuration)
 	}
 
 	// Extract stream URL (fresh URL for each attempt - important for retries)

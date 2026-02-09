@@ -11,8 +11,12 @@ import {
   StreamType,
   entersState,
   DiscordGatewayAdapterCreator,
+  AudioPlayerState,
 } from '@discordjs/voice';
 import { Readable } from 'stream';
+
+// Default timeout for waiting for player to go idle (ms)
+const IDLE_TIMEOUT_MS = 5000;
 
 interface GuildVoiceState {
   connection: VoiceConnection;
@@ -139,6 +143,51 @@ class VoiceManager {
       return success;
     }
     return false;
+  }
+
+  /**
+   * Wait for the player to go Idle (finished consuming all buffered audio).
+   * Returns true if safe to advance to next track, false if player is still playing.
+   * This prevents cutting off audio when auto-advancing tracks.
+   */
+  waitForIdle(guildId: string, timeoutMs = IDLE_TIMEOUT_MS): Promise<boolean> {
+    const state = this.guilds.get(guildId);
+    if (!state) {
+      return Promise.resolve(true); // No player, safe to advance
+    }
+
+    const player = state.player;
+
+    // Already idle? Return immediately
+    if (player.state.status === AudioPlayerStatus.Idle) {
+      console.log(`[VoiceManager] Player already idle for guild ${guildId}`);
+      return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        player.off('stateChange', handler);
+        // Timeout hit - check if STILL playing
+        if (player.state.status === AudioPlayerStatus.Playing) {
+          console.log(`[VoiceManager] Timeout but still playing for guild ${guildId} - not forcing advance`);
+          resolve(false); // Don't advance yet, let it finish naturally
+        } else {
+          console.log(`[VoiceManager] Timeout and player not playing for guild ${guildId} - safe to advance`);
+          resolve(true); // Safe to advance
+        }
+      }, timeoutMs);
+
+      const handler = (oldState: AudioPlayerState, newState: AudioPlayerState) => {
+        if (newState.status === AudioPlayerStatus.Idle) {
+          clearTimeout(timeout);
+          player.off('stateChange', handler);
+          console.log(`[VoiceManager] Player went idle for guild ${guildId} - safe to advance`);
+          resolve(true); // Safe to advance
+        }
+      };
+
+      player.on('stateChange', handler);
+    });
   }
 }
 

@@ -324,14 +324,14 @@ export class WebSocketHandler {
         const firstTrack = session.queueManager.startPlaying(0);
         if (firstTrack) {
           this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: firstTrack });
-          await this.playTrack(session, firstTrack.url, requestId);
+          await this.playTrack(session, firstTrack.url, requestId, 0, firstTrack.duration);
         }
       } else {
         session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
         const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
         if (track) {
           this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
-          await this.playTrack(session, track.url, requestId);
+          await this.playTrack(session, track.url, requestId, 0, track.duration);
         }
       }
     } catch (err) {
@@ -352,7 +352,7 @@ export class WebSocketHandler {
     if (track) {
       this.log('nodejs', `Playing from queue: ${track.title}`, session.userId);
       this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
-      await this.playTrack(session, track.url, requestId);
+      await this.playTrack(session, track.url, requestId, 0, track.duration);
     } else {
       this.log('nodejs', `Invalid queue index: ${index}`, session.userId);
     }
@@ -363,7 +363,7 @@ export class WebSocketHandler {
 
     const nextTrack = session.queueManager.skip();
     if (nextTrack) {
-      await this.playTrack(session, nextTrack.url, requestId);
+      await this.playTrack(session, nextTrack.url, requestId, 0, nextTrack.duration);
     } else {
       this.log('nodejs', 'No more tracks in queue', session.userId);
       this.broadcastJsonToUser(session.userId, { type: 'queueFinished' });
@@ -375,7 +375,7 @@ export class WebSocketHandler {
 
     const prevTrack = session.queueManager.previous();
     if (prevTrack) {
-      await this.playTrack(session, prevTrack.url, requestId);
+      await this.playTrack(session, prevTrack.url, requestId, 0, prevTrack.duration);
     } else {
       this.log('nodejs', 'Already at start of queue', session.userId);
     }
@@ -392,10 +392,10 @@ export class WebSocketHandler {
 
     this.log('nodejs', `Resuming from ${seconds.toFixed(2)}s: ${track.title}`, session.userId);
     this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
-    await this.playTrack(session, track.url, requestId, seconds);
+    await this.playTrack(session, track.url, requestId, seconds, track.duration);
   }
 
-  private async playTrack(session: UserSession, url: string, requestId: number, startAtSec: number = 0): Promise<void> {
+  private async playTrack(session: UserSession, url: string, requestId: number, startAtSec: number = 0, duration?: number): Promise<void> {
     // Use Discord user ID as session ID for Go API
     const sessionId = session.userId;
     session.currentSessionId = sessionId;
@@ -412,7 +412,7 @@ export class WebSocketHandler {
 
     try {
       const format = this.webMode ? 'web' : 'pcm';
-      const result = await this.apiClient.play(sessionId, url, format, startAtSec || undefined);
+      const result = await this.apiClient.play(sessionId, url, format, startAtSec || undefined, duration);
 
       if (requestId !== session.activePlayRequestId) {
         this.log('nodejs', 'Stale play request, stopping session', session.userId);
@@ -484,7 +484,7 @@ export class WebSocketHandler {
           this.log('nodejs', `Auto-advancing to next track: ${nextTrack.title}`, session.userId);
           const requestId = ++session.playRequestId;
           session.activePlayRequestId = requestId;
-          this.playTrack(session, nextTrack.url, requestId);
+          this.playTrack(session, nextTrack.url, requestId, 0, nextTrack.duration);
         } else {
           this.log('nodejs', 'Queue finished', session.userId);
           this.broadcastJsonToUser(session.userId, { type: 'queueFinished' });
@@ -529,7 +529,7 @@ export class WebSocketHandler {
             if (track) {
               const requestId = ++session.playRequestId;
               session.activePlayRequestId = requestId;
-              await this.playTrack(session, track.url, requestId);
+              await this.playTrack(session, track.url, requestId, 0, track.duration);
             }
           }
         } catch (err) {

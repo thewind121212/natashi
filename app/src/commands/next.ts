@@ -98,7 +98,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     });
 
     console.log(`[Next] Calling apiClient.play`);
-    await apiClient.play(guildId, nextTrack.url, 'opus');
+    await apiClient.play(guildId, nextTrack.url, 'opus', undefined, nextTrack.duration);
 
     // Wait for Go to be ready
     await readyPromise;

@@ -7,6 +7,7 @@ export interface PlayRequest {
   url: string;
   format?: 'pcm' | 'opus' | 'web';
   start_at?: number;
+  duration?: number; // Optional: track duration (skips yt-dlp metadata call in Go)
 }
 
 export interface ApiResponse {
@@ -80,11 +81,11 @@ export class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  async play(sessionId: string, url: string, format: string = 'pcm', startAt?: number): Promise<ApiResponse> {
+  async play(sessionId: string, url: string, format: string = 'pcm', startAt?: number, duration?: number): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}/session/${sessionId}/play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, format, start_at: startAt }),
+      body: JSON.stringify({ url, format, start_at: startAt, duration }),
     });
     return response.json() as Promise<ApiResponse>;
   }

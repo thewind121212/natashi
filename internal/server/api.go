@@ -22,9 +22,10 @@ func NewAPI(sessions *SessionManager) *API {
 
 // PlayRequest is the request body for play endpoint.
 type PlayRequest struct {
-	URL     string  `json:"url" binding:"required"`
-	Format  string  `json:"format"`
-	StartAt float64 `json:"start_at"`
+	URL      string  `json:"url" binding:"required"`
+	Format   string  `json:"format"`
+	StartAt  float64 `json:"start_at"`
+	Duration float64 `json:"duration"` // Optional: track duration from Node.js (skips yt-dlp metadata call)
 }
 
 // PlayResponse is the response for play endpoint.
@@ -112,10 +113,10 @@ func (a *API) Play(c *gin.Context) {
 		format = "pcm"
 	}
 
-	fmt.Printf("[API] Play request: session=%s url=%s format=%s\n", sessionID, req.URL, format)
+	fmt.Printf("[API] Play request: session=%s url=%s format=%s duration=%.0f\n", sessionID, req.URL, format, req.Duration)
 
 	// Start playback (this is non-blocking now)
-	err := a.sessions.StartPlayback(sessionID, req.URL, format, req.StartAt)
+	err := a.sessions.StartPlayback(sessionID, req.URL, format, req.StartAt, req.Duration)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, PlayResponse{
 			Status:    "error",

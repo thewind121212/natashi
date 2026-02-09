@@ -126,7 +126,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       socketClient.on('event', handler);
     });
 
-    await apiClient.play(guildId, track.url, 'opus');
+    await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
     await readyPromise;
 
     // Clear suppress flag after new track is ready (prevents leak to next natural finish)

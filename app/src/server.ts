@@ -135,7 +135,7 @@ export function createServer(getDiscordClient: () => Client | null): Express {
   app.post('/api/session/:id/play', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { url, format } = req.body;
+      const { url, format, start_at, duration } = req.body;
 
       if (!url) {
         res.status(400).json({ status: 'error', message: 'url is required' });
@@ -143,7 +143,7 @@ export function createServer(getDiscordClient: () => Client | null): Express {
       }
 
       console.log(`[API] Play: session=${id} url=${url}`);
-      const result = await apiClient.play(id, url, format || 'pcm');
+      const result = await apiClient.play(id, url, format || 'pcm', start_at, duration);
       res.json(result);
     } catch (err) {
       console.error('[API] Play error:', err);
