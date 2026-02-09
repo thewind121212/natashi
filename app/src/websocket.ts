@@ -2,6 +2,7 @@ import { IncomingMessage } from 'http';
 import { Duplex } from 'stream';
 import { WebSocket, WebSocketServer, RawData } from 'ws';
 import { parse as parseCookie } from 'cookie';
+import * as YouTubeSearch from 'youtube-search-api';
 import { SocketClient, Event } from './socket-client';
 import { ApiClient } from './api-client';
 import { AudioPlayer } from './audio-player';
@@ -10,6 +11,82 @@ import { SessionStore, UserSession } from './session-store';
 import { SqliteStore } from './sqlite-store';
 import { verifyToken, JwtPayload } from './auth/jwt';
 import { config } from './config';
+
+// Parse duration string like "3:45" or "1:23:45" to seconds
+function parseDuration(durationStr: string): number {
+  if (!durationStr) return 0;
+  const parts = durationStr.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
+}
+
+interface FastMetadata {
+  title: string;
+  duration: number;
+  thumbnail: string;
+  is_playlist?: boolean;
+}
+
+// Get fast metadata using youtube-search-api
+async function getFastMetadata(url: string, videoId: string | null): Promise<FastMetadata | null> {
+  if (!videoId) return null;
+  try {
+    const searchResults = await YouTubeSearch.GetListByKeyword(videoId, false, 5);
+    const items = searchResults?.items as Array<{ id: string; type: string; title: string; length?: { simpleText: string } }> | undefined;
+    const video = items?.find((item) => item.type === 'video' && item.id === videoId);
+    if (video) {
+      return {
+        title: video.title || 'Unknown',
+        duration: parseDuration(video.length?.simpleText || ''),
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      };
+    }
+    const firstVideo = items?.find((item) => item.type === 'video');
+    if (firstVideo) {
+      return {
+        title: firstVideo.title || 'Unknown',
+        duration: parseDuration(firstVideo.length?.simpleText || ''),
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      };
+    }
+    return null;
+  } catch {
+    return { title: 'Loading...', duration: 0, thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` };
+  }
+}
+
+interface PlaylistEntry {
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail: string;
+}
+
+// Get playlist data using youtube-search-api
+async function getFastPlaylist(playlistId: string): Promise<{ entries: PlaylistEntry[]; count: number; error?: string }> {
+  try {
+    const data = await YouTubeSearch.GetPlaylistData(playlistId, 200);
+    if (!data?.items?.length) {
+      return { entries: [], count: 0, error: 'Playlist is empty or not found' };
+    }
+    const entries: PlaylistEntry[] = [];
+    for (const item of data.items as Array<{ id: string; title: string; length?: { simpleText: string } }>) {
+      if (item.id) {
+        entries.push({
+          url: `https://www.youtube.com/watch?v=${item.id}`,
+          title: item.title || 'Unknown',
+          duration: parseDuration(item.length?.simpleText || ''),
+          thumbnail: `https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`,
+        });
+      }
+    }
+    return { entries, count: entries.length };
+  } catch (error) {
+    console.error('[WebSocket] Playlist extraction error:', error);
+    return { entries: [], count: 0, error: 'Failed to load playlist' };
+  }
+}
 
 interface AuthenticatedClient {
   ws: WebSocket;
@@ -301,14 +378,16 @@ export class WebSocketHandler {
     await this.abortCurrentPlayback(session);
 
     try {
-      const metadata = await this.apiClient.getMetadata(url);
-      if (requestId !== session.activePlayRequestId) return;
+      // Check if playlist URL (exclude YouTube Mix/Radio playlists)
+      const listMatch = url.match(/[?&]list=([^&]+)/);
+      const isPlaylist = (url.includes('list=') || url.includes('/playlist'))
+        && listMatch && !listMatch[1].startsWith('RD');
 
-      if (metadata.is_playlist) {
+      if (isPlaylist && listMatch) {
         this.log('nodejs', 'Detected playlist, extracting videos...', session.userId);
         this.broadcastJsonToUser(session.userId, { type: 'status', message: 'Loading playlist...' });
 
-        const playlist = await this.apiClient.getPlaylist(url);
+        const playlist = await getFastPlaylist(listMatch[1]);
         if (requestId !== session.activePlayRequestId) return;
         if (playlist.error) {
           this.broadcastJsonToUser(session.userId, { type: 'error', message: playlist.error });
@@ -327,7 +406,16 @@ export class WebSocketHandler {
           await this.playTrack(session, firstTrack.url, requestId, 0, firstTrack.duration);
         }
       } else {
-        session.queueManager.addTrack(url, metadata.title, metadata.duration, metadata.thumbnail);
+        // Single video - use fast metadata
+        const videoId = this.extractVideoId(url);
+        const metadata = await getFastMetadata(url, videoId);
+        if (requestId !== session.activePlayRequestId) return;
+
+        const title = metadata?.title || 'Unknown';
+        const duration = metadata?.duration || 0;
+        const thumbnail = metadata?.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+
+        session.queueManager.addTrack(url, title, duration, thumbnail);
         const track = session.queueManager.startPlaying(session.queueManager.getQueue().length - 1);
         if (track) {
           this.broadcastJsonToUser(session.userId, { type: 'nowPlaying', nowPlaying: track });
@@ -516,13 +604,14 @@ export class WebSocketHandler {
       } else if (message.action === 'addToQueue' && message.url) {
         this.log('nodejs', `Adding to queue: ${message.url}`, session.userId);
         try {
-          const metadata = await this.apiClient.getMetadata(message.url);
-          if (metadata.error) {
-            this.broadcastJsonToUser(session.userId, { type: 'error', message: metadata.error });
-            return;
-          }
-          session.queueManager.addTrack(message.url, metadata.title, metadata.duration, metadata.thumbnail);
-          this.log('nodejs', `Added to queue: ${metadata.title}`, session.userId);
+          const videoId = this.extractVideoId(message.url);
+          const metadata = await getFastMetadata(message.url, videoId);
+          const title = metadata?.title || 'Unknown';
+          const duration = metadata?.duration || 0;
+          const thumbnail = metadata?.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+
+          session.queueManager.addTrack(message.url, title, duration, thumbnail);
+          this.log('nodejs', `Added to queue: ${title}`, session.userId);
 
           if (!session.currentSessionId) {
             const track = session.queueManager.startPlaying(0);
