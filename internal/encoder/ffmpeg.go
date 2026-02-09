@@ -155,12 +155,14 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec f
 	sampleRate := fmt.Sprintf("%d", p.config.SampleRate)
 	channels := fmt.Sprintf("%d", p.config.Channels)
 
-	// Base input args - buffer ahead for smooth playback
+	// Base input args - robust reconnect for YouTube streams
 	args := []string{
-		// Reconnect support for network streams
 		"-reconnect", "1",
 		"-reconnect_streamed", "1",
+		"-reconnect_on_network_error", "1",
+		"-reconnect_on_http_error", "4xx,5xx",
 		"-reconnect_delay_max", "5",
+		"-multiple_requests", "1",
 	}
 
 	if startAtSec > 0 {

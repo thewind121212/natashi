@@ -319,12 +319,14 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) (pre
 				playedTime := time.Since(session.streamStartTime).Seconds()
 				expectedDur := session.expectedDuration
 				stopped := session.isStopped
+				bytesSent := session.BytesSent
 				session.mu.Unlock()
 
 				// Consider premature if:
 				// 1. Not explicitly stopped by user
 				// 2. Expected duration is known and we're well short of it
 				// 3. OR expected duration unknown but we played very little
+				// 4. OR bytes sent are much less than expected for the duration
 				if !stopped {
 					if expectedDur > 0 && playedTime < expectedDur-prematureEndingGap {
 						fmt.Printf("[Session] Stream ended early for %s: played %.1fs of expected %.1fs\n",
@@ -335,6 +337,17 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) (pre
 						fmt.Printf("[Session] Stream ended suspiciously early for %s: only %.1fs played\n",
 							shortSessionID(session.ID), playedTime)
 						return true
+					}
+					// Byte-based check: if expected duration is known, verify we sent
+					// enough bytes. At 128kbps Opus, expect ~16KB/s. If we got less
+					// than 60% of expected bytes, stream was likely truncated by TLS errors.
+					if expectedDur > 0 {
+						expectedBytes := int64(expectedDur * 16000) // ~128kbps = 16KB/s
+						if bytesSent < expectedBytes*60/100 {
+							fmt.Printf("[Session] Stream data too short for %s: sent %d bytes, expected ~%d bytes (%.0f%%)\n",
+								shortSessionID(session.ID), bytesSent, expectedBytes, float64(bytesSent)*100/float64(expectedBytes))
+							return true
+						}
 					}
 				}
 				return false
