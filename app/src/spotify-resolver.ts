@@ -7,6 +7,9 @@
 // 3. resolveSpotifySearch() resolves a single track to YouTube just before playback
 
 import * as YouTubeSearch from 'youtube-search-api';
+import { ApiClient } from './api-client.js';
+
+const apiClient = new ApiClient();
 
 export interface ResolvedTrack {
   url: string;
@@ -70,9 +73,27 @@ function getSpotifyEmbedPath(url: string): string | null {
   return match ? `${match[1]}/${match[2]}` : null;
 }
 
+// Clean a Spotify search query to avoid confusing YouTube search
+// Strips feat/ft tags (artist is already separate), deduplicates artist names
+function cleanSearchQuery(title: string, artist: string): string {
+  // Remove (feat. ...), (ft. ...), [feat. ...], [ft. ...] from title
+  const cleanTitle = title.replace(/[\(\[]\s*(?:feat|ft)\.?\s+[^\)\]]*[\)\]]/gi, '').trim();
+
+  // Split artist field into individual names, deduplicate against title
+  const titleLower = cleanTitle.toLowerCase();
+  const artists = artist
+    .split(/,\s*/)
+    .map((a) => a.trim())
+    .filter((a) => a && !titleLower.includes(a.toLowerCase()));
+
+  // Use first artist only to keep query short
+  const mainArtist = artists[0] || artist.split(/,\s*/)[0]?.trim() || '';
+  return mainArtist ? `${cleanTitle} ${mainArtist}` : cleanTitle;
+}
+
 // Build a placeholder URL for queue storage
 export function buildSpotifySearchUrl(title: string, artist: string): string {
-  const query = artist ? `${title} ${artist}` : title;
+  const query = cleanSearchQuery(title, artist);
   return `${SPOTIFY_SEARCH_PREFIX}${query}`;
 }
 
@@ -195,6 +216,77 @@ function scoreCandidate(
   return { id: video.id, title: video.title || query, duration: ytDuration, score };
 }
 
+// Search YouTube using the npm library (fast, scrapes YouTube HTML)
+async function searchWithLibrary(
+  query: string,
+  expectedDurationSec?: number,
+): Promise<ResolvedTrack | null> {
+  const results = await YouTubeSearch.GetListByKeyword(query, false, 10);
+  const items = results?.items as
+    | Array<{
+        id: string;
+        type: string;
+        title: string;
+        length?: { simpleText: string };
+      }>
+    | undefined;
+  const videos = items?.filter((item) => item.type === 'video');
+  if (!videos?.length) return null;
+
+  const scored = videos.map((v) => scoreCandidate(v, query, expectedDurationSec));
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+
+  console.log(
+    `[Spotify] Picked: "${best.title}" (score=${best.score}, duration=${best.duration}s) from ${scored.length} candidates`,
+  );
+
+  return {
+    url: `https://www.youtube.com/watch?v=${best.id}`,
+    title: best.title,
+    duration: best.duration,
+    thumbnail: `https://i.ytimg.com/vi/${best.id}/hqdefault.jpg`,
+  };
+}
+
+// Fallback: search via Go API (uses yt-dlp, slower but more reliable)
+async function searchWithGoApi(
+  query: string,
+  expectedDurationSec?: number,
+): Promise<ResolvedTrack | null> {
+  console.log(`[Spotify] Falling back to Go API search: "${query}"`);
+  const response = await apiClient.search(query);
+  if (response.error || !response.results?.length) return null;
+
+  // Score results using same logic
+  const scored = response.results.map((r) =>
+    scoreCandidate(
+      { id: r.id, type: 'video', title: r.title, length: r.duration ? { simpleText: formatDuration(r.duration) } : undefined },
+      query,
+      expectedDurationSec,
+    ),
+  );
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+
+  console.log(
+    `[Spotify] Go API picked: "${best.title}" (score=${best.score}, duration=${best.duration}s) from ${scored.length} candidates`,
+  );
+
+  return {
+    url: `https://www.youtube.com/watch?v=${best.id}`,
+    title: best.title,
+    duration: best.duration,
+    thumbnail: `https://i.ytimg.com/vi/${best.id}/hqdefault.jpg`,
+  };
+}
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 // Resolve a single spotify:search: URL to a YouTube track
 // Called just before playback — ~500ms for one YouTube search
 // expectedDurationSec: Spotify track duration for better matching
@@ -208,31 +300,15 @@ export async function resolveSpotifySearch(searchUrl: string, expectedDurationSe
   try {
     const result = await Promise.race([
       (async () => {
-        const results = await YouTubeSearch.GetListByKeyword(query, false, 10);
-        const items = results?.items as
-          | Array<{
-              id: string;
-              type: string;
-              title: string;
-              length?: { simpleText: string };
-            }>
-          | undefined;
-        const videos = items?.filter((item) => item.type === 'video');
-        if (!videos?.length) return null;
-
-        // Score all candidates and pick the best match
-        const scored = videos.map((v) => scoreCandidate(v, query, expectedDurationSec));
-        scored.sort((a, b) => b.score - a.score);
-        const best = scored[0];
-
-        console.log(`[Spotify] Picked: "${best.title}" (score=${best.score}, duration=${best.duration}s) from ${scored.length} candidates`);
-
-        return {
-          url: `https://www.youtube.com/watch?v=${best.id}`,
-          title: best.title,
-          duration: best.duration,
-          thumbnail: `https://i.ytimg.com/vi/${best.id}/hqdefault.jpg`,
-        } as ResolvedTrack;
+        // Try npm library first (faster)
+        try {
+          const track = await searchWithLibrary(query, expectedDurationSec);
+          if (track) return track;
+        } catch (err) {
+          console.warn(`[Spotify] youtube-search-api failed, using Go API fallback: ${err}`);
+        }
+        // Fallback to Go API (yt-dlp search)
+        return searchWithGoApi(query, expectedDurationSec);
       })(),
       new Promise<null>((_, reject) =>
         setTimeout(() => reject(new Error('Spotify resolve timeout')), RESOLVE_TIMEOUT_MS),

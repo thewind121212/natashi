@@ -64,6 +64,15 @@ interface PlaylistEntry {
   thumbnail: string;
 }
 
+interface SearchResult {
+  id: string;
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail: string;
+  channel: string;
+}
+
 // Get playlist data using youtube-search-api
 async function getFastPlaylist(playlistId: string): Promise<{ entries: PlaylistEntry[]; count: number; error?: string }> {
   try {
@@ -87,6 +96,36 @@ async function getFastPlaylist(playlistId: string): Promise<{ entries: PlaylistE
     console.error('[WebSocket] Playlist extraction error:', error);
     return { entries: [], count: 0, error: 'Failed to load playlist' };
   }
+}
+
+// Get search results using youtube-search-api
+async function getSearchResults(query: string, limit: number = 6): Promise<SearchResult[]> {
+  const searchResults = await YouTubeSearch.GetListByKeyword(query, false, limit + 2);
+  if (!searchResults?.items?.length) return [];
+
+  return (searchResults.items as Array<{
+    id: string;
+    type: string;
+    title: string;
+    length?: { simpleText: string };
+    thumbnail?: { thumbnails?: Array<{ url: string }> };
+    channelTitle?: string;
+  }>).
+    filter((item) => item.type === 'video')
+    .slice(0, limit)
+    .map((item) => {
+      const thumbnail = item.thumbnail?.thumbnails?.length
+        ? item.thumbnail.thumbnails[item.thumbnail.thumbnails.length - 1].url
+        : `https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`;
+      return {
+        id: item.id,
+        url: `https://www.youtube.com/watch?v=${item.id}`,
+        title: item.title || 'Unknown',
+        duration: parseDuration(item.length?.simpleText || ''),
+        thumbnail,
+        channel: item.channelTitle || '',
+      };
+    });
 }
 
 interface AuthenticatedClient {
@@ -618,7 +657,7 @@ export class WebSocketHandler {
         this.broadcastJsonToUser(session.userId, event);
         break;
 
-      case 'finished':
+      case 'finished': {
         this.log('go', `Stream finished, total: ${session.bytesReceived} bytes`, session.userId);
         if (this.debugMode && !this.webMode) {
           this.audioPlayer.end();
@@ -647,6 +686,7 @@ export class WebSocketHandler {
           this.broadcastJsonToUser(session.userId, { type: 'queueFinished' });
         }
         break;
+      }
 
       case 'error':
         this.log('go', `Error: ${event.message}`, session.userId);
@@ -670,6 +710,19 @@ export class WebSocketHandler {
         const url = message.url.trim();
         this.scheduleTransition(session, requestId, () => this.handlePlayUrl(session, url, requestId));
 
+      } else if (message.action === 'search' && message.query) {
+        const requestId = typeof message.requestId === 'number' ? message.requestId : undefined;
+        try {
+          const results = await getSearchResults(message.query.trim());
+          ws.send(JSON.stringify({ type: 'searchResults', results, requestId }));
+        } catch (err) {
+          ws.send(JSON.stringify({
+            type: 'searchError',
+            message: err instanceof Error ? err.message : 'Search failed',
+            requestId,
+          }));
+        }
+
       } else if (message.action === 'addToQueue' && message.url) {
         this.log('nodejs', `Adding to queue: ${message.url}`, session.userId);
         try {
@@ -690,6 +743,31 @@ export class WebSocketHandler {
               );
             }
             this.log('nodejs', `Added ${spotifyTracks.length} Spotify track(s) to queue`, session.userId);
+          } else if ((message.url.includes('list=') || message.url.includes('/playlist'))) {
+            const listMatch = message.url.match(/[?&]list=([^&]+)/);
+            const isPlaylist = listMatch && !listMatch[1].startsWith('RD');
+            if (isPlaylist && listMatch) {
+              this.broadcastJsonToUser(session.userId, { type: 'status', message: 'Loading playlist...' });
+              const playlist = await getFastPlaylist(listMatch[1]);
+              if (playlist.error) {
+                this.broadcastJsonToUser(session.userId, { type: 'error', message: playlist.error });
+                return;
+              }
+
+              for (const entry of playlist.entries) {
+                session.queueManager.addTrack(entry.url, entry.title, entry.duration, entry.thumbnail);
+              }
+              this.log('nodejs', `Added ${playlist.count} playlist tracks to queue`, session.userId);
+            } else {
+              const videoId = this.extractVideoId(message.url);
+              const metadata = await getFastMetadata(message.url, videoId);
+              const title = metadata?.title || 'Unknown';
+              const duration = metadata?.duration || 0;
+              const thumbnail = metadata?.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+
+              session.queueManager.addTrack(message.url, title, duration, thumbnail);
+              this.log('nodejs', `Added to queue: ${title}`, session.userId);
+            }
           } else {
             const videoId = this.extractVideoId(message.url);
             const metadata = await getFastMetadata(message.url, videoId);
@@ -700,24 +778,25 @@ export class WebSocketHandler {
             session.queueManager.addTrack(message.url, title, duration, thumbnail);
             this.log('nodejs', `Added to queue: ${title}`, session.userId);
           }
-
-          if (!session.currentSessionId) {
-            const track = session.queueManager.startPlaying(0);
-            if (track) {
-              const requestId = ++session.playRequestId;
-              session.activePlayRequestId = requestId;
-              await this.playTrack(session, track.url, requestId, 0, track.duration);
-            }
-          }
         } catch (err) {
           this.log('nodejs', `Failed to get metadata: ${err}`, session.userId);
           this.broadcastJsonToUser(session.userId, { type: 'error', message: `Failed to get metadata: ${err}` });
+          return;
         }
+
+        this.broadcastJsonToUser(session.userId, {
+          type: 'queueUpdated',
+          ...session.queueManager.getState(),
+        });
 
       } else if (message.action === 'removeFromQueue' && typeof message.index === 'number') {
         const removed = session.queueManager.removeTrack(message.index);
         if (removed) {
           this.log('nodejs', `Removed track at index ${message.index}`, session.userId);
+          this.broadcastJsonToUser(session.userId, {
+            type: 'queueUpdated',
+            ...session.queueManager.getState(),
+          });
         }
 
       } else if (message.action === 'playFromQueue' && typeof message.index === 'number') {

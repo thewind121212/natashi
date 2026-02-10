@@ -15,6 +15,15 @@ interface Track {
   addedAt: string;
 }
 
+interface SearchResult {
+  id: string;
+  url: string;
+  title: string;
+  duration: number;
+  thumbnail?: string;
+  channel?: string;
+}
+
 interface User {
   id: string;
   username: string;
@@ -36,6 +45,8 @@ interface WebSocketMessage {
   currentIndex?: number;
   nowPlaying?: Track | null;
   user?: User;
+  results?: SearchResult[];
+  requestId?: number;
 }
 
 interface UseWebSocketReturn {
@@ -54,7 +65,12 @@ interface UseWebSocketReturn {
   nowPlaying: Track | null;
   user: User | null;
   volume: number;
+  searchResults: SearchResult[];
+  isSearching: boolean;
+  searchError: string | null;
   play: (url: string) => void;
+  search: (query: string) => void;
+  clearSearch: () => void;
   stop: () => void;
   pause: () => void;
   resume: () => void;
@@ -70,7 +86,7 @@ interface UseWebSocketReturn {
   seek: (seconds: number) => void;
 }
 
-export type { Track };
+export type { Track, SearchResult };
 
 interface UseWebSocketOptions {
   onUnauthorized?: () => void;
@@ -91,10 +107,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const mountedRef = useRef(true);
   const lastTickRef = useRef<number | null>(null);
   const playbackTimeRef = useRef(0);
+  const lastUiProgressUpdateRef = useRef(0);
   const audioProgressOffsetRef = useRef(0);
   const autoPauseRequestedRef = useRef(false);
   const needsResumeFromRef = useRef(false);
   const resumeFromRequestedRef = useRef<number | null>(null);
+  const searchRequestIdRef = useRef(0);
 
   const [isConnected, setIsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
@@ -110,6 +128,9 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   // Load volume from localStorage (default 1.0)
   const [volume, setVolumeState] = useState(() => {
     const saved = localStorage.getItem('player-volume');
@@ -159,8 +180,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   // Audio player for web mode (Opus -> Web Audio API)
   const audioPlayer = useAudioPlayer({
     onProgress: (seconds) => {
-      if (mountedRef.current) {
-        const adjusted = audioProgressOffsetRef.current + seconds;
+      const adjusted = audioProgressOffsetRef.current + seconds;
+      playbackTimeRef.current = adjusted;
+      if (!mountedRef.current) return;
+      const now = performance.now();
+      if (now - lastUiProgressUpdateRef.current >= 250) {
+        lastUiProgressUpdateRef.current = now;
         setPlaybackTime(adjusted);
         lastTickRef.current = Date.now();
       }
@@ -319,6 +344,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         audioStartedRef.current = false;
         audioProgressOffsetRef.current = 0;
         lastTickRef.current = null;
+        lastUiProgressUpdateRef.current = 0;
         addLog('nodejs', 'Playback stopped');
         break;
 
@@ -330,6 +356,20 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       case 'resumed':
         setIsPaused(false);
         updateStatus('▶ Resumed', 'success');
+        break;
+
+      case 'searchResults':
+        if (msg.requestId && msg.requestId !== searchRequestIdRef.current) return;
+        setSearchResults(msg.results || []);
+        setIsSearching(false);
+        setSearchError(null);
+        break;
+
+      case 'searchError':
+        if (msg.requestId && msg.requestId !== searchRequestIdRef.current) return;
+        setSearchResults([]);
+        setIsSearching(false);
+        setSearchError(msg.message || 'Search failed');
         break;
 
       case 'sessionReset':
@@ -345,6 +385,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         audioStartedRef.current = false;
         audioProgressOffsetRef.current = 0;
         lastTickRef.current = null;
+        lastUiProgressUpdateRef.current = 0;
         audioPlayerRef.current.player?.reset();
         updateStatus('Session reset', 'normal');
         addLog('nodejs', 'Session reset');
@@ -475,18 +516,24 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       }
       wsRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [getWebSocketUrl]);
 
   useEffect(() => {
     if (!webMode || !isPlaying || isPaused) {
       lastTickRef.current = null;
       return;
     }
-    if (audioPlayer.isInitialized()) return;
+    // Audio player's onProgress handles time updates once initialized
+    if (audioPlayerRef.current.player.isInitialized()) return;
     lastTickRef.current = Date.now();
     const timer = window.setInterval(() => {
       if (!mountedRef.current || !lastTickRef.current) return;
+      // Stop once audio player takes over progress reporting
+      if (audioPlayerRef.current.player.isInitialized()) {
+        lastTickRef.current = null;
+        clearInterval(timer);
+        return;
+      }
       const now = Date.now();
       const delta = (now - lastTickRef.current) / 1000;
       lastTickRef.current = now;
@@ -495,7 +542,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     return () => {
       clearInterval(timer);
     };
-  }, [webMode, isPlaying, isPaused, audioPlayer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webMode, isPlaying, isPaused]);
 
   const play = useCallback(async (url: string) => {
     if (!url.trim()) {
@@ -520,6 +568,34 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       url: url.trim(),
     }));
   }, [updateStatus, addLog, ensureWebAudioInitialized]);
+
+  const search = useCallback((query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearching(false);
+      return;
+    }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setSearchError('Not connected to server');
+      setIsSearching(false);
+      return;
+    }
+    const requestId = ++searchRequestIdRef.current;
+    setIsSearching(true);
+    setSearchError(null);
+    wsRef.current.send(JSON.stringify({
+      action: 'search',
+      query: query.trim(),
+      requestId,
+    }));
+  }, []);
+
+  const clearSearch = useCallback(() => {
+    setSearchResults([]);
+    setSearchError(null);
+    setIsSearching(false);
+  }, []);
 
   const stop = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ action: 'stop' }));
@@ -679,7 +755,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     nowPlaying,
     user,
     volume,
+    searchResults,
+    isSearching,
+    searchError,
     play,
+    search,
+    clearSearch,
     stop,
     pause,
     resume,

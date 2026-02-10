@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback } from 'react';
 import { OggOpusDecoder } from 'ogg-opus-decoder';
 
 interface UseAudioPlayerOptions {
@@ -42,13 +42,12 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
   const bufferedSecondsRef = useRef(0);
   const initializedRef = useRef(false);
   const onProgressRef = useRef(onProgress);
-  useEffect(() => {
-    onProgressRef.current = onProgress;
-  }, [onProgress]);
+  onProgressRef.current = onProgress;
 
   // Buffer management
   const bufferRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
+  const lastProgressNotifyRef = useRef(0);
 
   const init = useCallback(async () => {
     if (initializedRef.current) return;
@@ -107,6 +106,12 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
       scheduledAhead += duration;
 
       playedSecondsRef.current += duration;
+    }
+
+    // Throttle UI progress updates to ~4x/sec instead of every 20ms frame
+    const progressNow = performance.now();
+    if (progressNow - lastProgressNotifyRef.current > 250) {
+      lastProgressNotifyRef.current = progressNow;
       onProgressRef.current?.(playedSecondsRef.current);
     }
   }, []);
@@ -178,6 +183,7 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
     bufferRef.current = [];
     bufferedSecondsRef.current = 0;
     isPlayingRef.current = false;
+    lastProgressNotifyRef.current = 0;
     decoderRef.current?.reset();
   }, []);
 
