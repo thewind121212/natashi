@@ -261,6 +261,7 @@ interface PlayerControlsProps {
   displayTime: number;
   duration: number;
   isDragging: boolean;
+  canGoPrevious: boolean;
   progressBarRef: React.RefObject<HTMLButtonElement | null>;
   onProgressMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onProgressTouchStart: (e: React.TouchEvent<HTMLButtonElement>) => void;
@@ -277,6 +278,7 @@ const PlayerControls = memo(function PlayerControls({
   isPaused,
   nowPlaying,
   volume,
+  canGoPrevious,
   displayTime,
   duration,
   isDragging,
@@ -302,7 +304,7 @@ const PlayerControls = memo(function PlayerControls({
       />
 
       <div className="flex items-center justify-center gap-4 md:gap-6">
-        <button type="button" onClick={onPrevious} disabled={isLoading} className="p-2 text-slate-300 hover:text-white transition-colors disabled:opacity-50">
+        <button type="button" onClick={onPrevious} disabled={!canGoPrevious} className="p-2 text-slate-300 hover:text-white transition-colors disabled:opacity-50">
           <SkipBack size={28} fill="currentColor" />
         </button>
 
@@ -398,9 +400,9 @@ const QueueItem = memo(function QueueItem({
         onClick={() => onPlay(index)}
         className="flex items-center flex-1 min-w-0 p-3 text-left"
       >
-        <div className="w-10 h-10 rounded-lg flex items-center justify-center mr-4 overflow-hidden relative shadow-sm bg-slate-700">
+        <div className="w-10 h-10 shrink-0 rounded-lg flex items-center justify-center mr-4 overflow-hidden relative shadow-sm bg-slate-700">
           {track.thumbnail ? (
-            <img src={track.thumbnail} alt="cover" className="w-full h-full object-cover" />
+            <img src={track.thumbnail} alt="cover" className="w-full h-full object-cover" loading="lazy" />
           ) : (
             <Music size={16} className="text-slate-500" />
           )}
@@ -732,6 +734,21 @@ export default function AudioPlay() {
     }
   }, [currentIndex, isLoading, isPaused, isPlaying, pause, playFromQueue, queue.length, resume]);
 
+  const handlePrevious = useCallback(() => {
+    if (isLoading) return;
+    // If > 3s into track, replay current track
+    if (playbackTime > 3) {
+      seek(0);
+      return;
+    }
+    // Otherwise go to previous track (if not at index 0)
+    if (currentIndex > 0) {
+      previous();
+    }
+  }, [isLoading, playbackTime, currentIndex, previous, seek]);
+
+  const canGoPrevious = !isLoading && (playbackTime > 3 || currentIndex > 0);
+
   // Progress bar seek handlers
   const dragTimeRef = useRef(0);
 
@@ -941,11 +958,12 @@ export default function AudioPlay() {
                 displayTime={displayTime}
                 duration={duration}
                 isDragging={isDragging}
+                canGoPrevious={canGoPrevious}
                 progressBarRef={progressBarRef}
                 onProgressMouseDown={handleProgressMouseDown}
                 onProgressTouchStart={handleProgressTouchStart}
                 onPlayPause={handlePlayPause}
-                onPrevious={previous}
+                onPrevious={handlePrevious}
                 onSkip={skip}
                 onStop={stop}
                 onVolumeChange={setVolume}
