@@ -919,7 +919,7 @@ export default function AudioPlay() {
       </div>
 
       <div className="flex-1 overflow-hidden px-4 md:px-6 pb-4 flex items-center">
-        <div className="max-w-6xl mx-auto h-full max-h-[800px] grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="w-full max-w-6xl mx-auto h-full max-h-[800px] grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-7 flex flex-col gap-6 overflow-hidden">
             <div className="bg-slate-800/80 backdrop-blur-xl rounded-3xl p-6 md:p-10 shadow-2xl border border-slate-700/50 flex flex-col justify-between h-full relative overflow-hidden">
               {nowPlaying?.thumbnail && (

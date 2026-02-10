@@ -268,19 +268,17 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       case 'session':
         updateStatus('Extracting...', 'normal');
         addLog('nodejs', `Session started: ${msg.session_id}`);
-        setIsPlaying(true);
         setIsPaused(false);
         if (resumeFromRequestedRef.current !== null) {
           const resumeFrom = resumeFromRequestedRef.current;
           setPlaybackTime(resumeFrom);
           audioProgressOffsetRef.current = resumeFrom;
-          lastTickRef.current = Date.now();
           resumeFromRequestedRef.current = null;
         } else {
           setPlaybackTime(0);
           audioProgressOffsetRef.current = 0;
-          lastTickRef.current = Date.now();
         }
+        lastTickRef.current = null;
         audioStartedRef.current = false;
         // Reset audio player for new track (web mode)
         audioPlayerRef.current.player?.reset();
