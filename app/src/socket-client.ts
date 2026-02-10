@@ -5,7 +5,7 @@ import { PassThrough } from 'stream';
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
 // Prebuffer configuration
-const PREBUFFER_SIZE = 25; // Buffer 25 frames (500ms) before starting playback — matches Lavalink
+const PREBUFFER_SIZE = 50; // Buffer 50 frames (1s) before starting playback
 
 /**
  * JitterBuffer prebuffers incoming audio chunks before letting Discord consume them.
