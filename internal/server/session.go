@@ -206,12 +206,9 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 				fmt.Printf("[Session] Track duration: %.0fs (from yt-dlp)\n", session.expectedDuration)
 			}
 		}
-	} else if session.expectedDuration > 0 {
-		fmt.Printf("[Session] Track duration: %.0fs (from Node.js, skipped yt-dlp)\n", session.expectedDuration)
 	}
 
 	// Extract stream URL (fresh URL for each attempt - important for retries)
-	fmt.Println("[Session] Extracting stream URL...")
 	streamURL, err := extractor.ExtractStreamURL(session.URL)
 	if err != nil {
 		session.SetState(StateError)
@@ -227,8 +224,6 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 	default:
 	}
 
-	fmt.Printf("[Session] Stream URL extracted (length: %d)\n", len(streamURL))
-
 	// Create encoding pipeline
 	pipeline := encoder.NewDefaultPipeline()
 	pipeline.SetSessionID(session.ID)
@@ -239,7 +234,6 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 	session.mu.Unlock()
 
 	// Start pipeline with seek position
-	fmt.Printf("[Session] Starting encoding pipeline (seek: %.1fs)...\n", seekPosition)
 	if err := pipeline.Start(sessionCtx, streamURL, session.Format, seekPosition); err != nil {
 		session.SetState(StateError)
 		m.sendEvent(session.ID, "error", fmt.Sprintf("pipeline failed: %v", err))

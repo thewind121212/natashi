@@ -5,7 +5,7 @@ import { PassThrough } from 'stream';
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
 // Prebuffer configuration
-const PREBUFFER_SIZE = 15; // Buffer 15 frames (300ms) before starting playback
+const PREBUFFER_SIZE = 25; // Buffer 25 frames (500ms) before starting playback
 
 /**
  * JitterBuffer prebuffers incoming audio chunks before letting Discord consume them.
@@ -16,6 +16,7 @@ class JitterBuffer {
   private outputStream: PassThrough;
   private started = false;
   private prebuffer: Buffer[] = [];
+  private lastPushTime = 0;
 
   constructor(outputStream: PassThrough) {
     this.outputStream = outputStream;
@@ -28,22 +29,32 @@ class JitterBuffer {
       this.prebuffer.push(chunk);
       if (this.prebuffer.length >= PREBUFFER_SIZE) {
         this.started = true;
-        console.log(`[JitterBuffer] Prebuffer full (${this.prebuffer.length} frames), flushing to Discord`);
         for (const buffered of this.prebuffer) {
           this.outputStream.push(buffered);
         }
         this.prebuffer = [];
+        this.lastPushTime = Date.now();
       }
       return;
     }
 
-    // After prebuffer phase: pass through directly
+    // Stutter detection: log when gap between chunks exceeds 100ms (5x normal 20ms)
+    const now = Date.now();
+    if (this.lastPushTime > 0) {
+      const gap = now - this.lastPushTime;
+      if (gap > 100) {
+        console.log(`[Stutter] Audio gap detected: ${gap}ms since last chunk (expected ~20ms)`);
+      }
+    }
+    this.lastPushTime = now;
+
     this.outputStream.push(chunk);
   }
 
   stop(): void {
     this.started = false;
     this.prebuffer = [];
+    this.lastPushTime = 0;
   }
 }
 
@@ -219,12 +230,8 @@ export class SocketClient extends EventEmitter {
     if (session) {
       // Check if stream was closed by Discord (happens when stream is empty during yt-dlp extraction)
       if (session.stream.writableEnded || session.stream.destroyed) {
-        // Stream was closed, but we still have it in the map - recreate it
-        console.log(`[SocketClient] Recreating closed stream for session ${sessionId.slice(0, 8)}`);
         const newStream = new PassThrough();
         session.stream = newStream;
-        // Note: The old AudioResource in Discord is now orphaned, but new data will buffer
-        // until someone creates a new AudioResource from this stream
       }
 
       if (session.jitterBuffer) {
@@ -234,10 +241,6 @@ export class SocketClient extends EventEmitter {
         // Direct pass-through for container formats (Ogg/Opus)
         session.stream.push(data);
       }
-    } else {
-      // Debug: log when audio can't be routed (session not found)
-      const knownSessions = Array.from(this.sessionStreams.keys()).join(', ');
-      console.log(`[SocketClient] No stream for session "${sessionId}" (len=${sessionId.length}), known: [${knownSessions}]`);
     }
   }
 
@@ -274,7 +277,6 @@ export class SocketClient extends EventEmitter {
     const stream = new PassThrough();
 
     this.sessionStreams.set(sessionId, { stream, jitterBuffer: null });
-    console.log(`[SocketClient] Created stream for session "${sessionId}" (len=${sessionId.length}), total: ${this.sessionStreams.size}`);
 
     // Note: Don't delete from map on 'close' - Discord may close empty streams early
     // while waiting for Go to start sending data. Cleanup is done explicitly via
@@ -307,7 +309,6 @@ export class SocketClient extends EventEmitter {
       // Just signal end of data - don't stop jitter buffer or delete from map yet
       // Discord player will continue consuming buffered data until it goes Idle
       if (!session.stream.writableEnded) {
-        console.log(`[SocketClient] Gracefully ending stream for session ${sessionId.slice(0, 8)}`);
         session.stream.end();
       }
       // Note: Don't delete from map - cleanup happens when next track starts

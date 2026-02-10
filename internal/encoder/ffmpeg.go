@@ -58,7 +58,7 @@ func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format For
 	}
 
 	args := p.buildArgs(streamURL, format, startAtSec)
-	fmt.Printf("[FFmpeg] Starting with format: %s\n", format)
+	fmt.Printf("[FFmpeg] [%s] Starting (format: %s)\n", p.shortSessionID(), format)
 	p.cmd = exec.CommandContext(ctx, "ffmpeg", args...)
 
 	var err error
@@ -76,8 +76,6 @@ func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format For
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
-
-	fmt.Printf("[FFmpeg] Started with PID %d\n", p.cmd.Process.Pid)
 
 	// Log stderr in background (helps debug premature stream endings)
 	go p.readStderr()
@@ -278,8 +276,6 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 	totalBytes := 0
 	chunkCount := 0
 
-	fmt.Printf("[FFmpeg] [%s] Starting to read output (buffer: %d bytes)\n", p.shortSessionID(), p.readBufferSize)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -301,14 +297,6 @@ func (p *FFmpegPipeline) readOutput(ctx context.Context) {
 				copy(chunk, buf[:n])
 				totalBytes += n
 				chunkCount++
-				// Log every 100 chunks (~2 seconds of audio)
-				if chunkCount%100 == 1 {
-					if totalBytes < 1024 {
-						fmt.Printf("[FFmpeg] [%s] Progress: %d bytes (%d chunks)\n", p.shortSessionID(), totalBytes, chunkCount)
-					} else {
-						fmt.Printf("[FFmpeg] [%s] Progress: %d KB (%d chunks)\n", p.shortSessionID(), totalBytes/1024, chunkCount)
-					}
-				}
 				select {
 				case p.output <- chunk:
 				case <-ctx.Done():
