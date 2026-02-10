@@ -155,7 +155,7 @@ async function startNextTrack(
     // Clear suppress flag
     session.suppressAutoAdvanceFor.delete(guildId);
 
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     voiceManager.playStream(guildId, audioStream);
 
     // Track playback start time

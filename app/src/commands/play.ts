@@ -338,7 +338,7 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
     console.log(`[Play] Go is ready, creating stream for Discord`);
 
     // NOW create stream and start Discord playback
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);
     if (!success) {
       console.error(`[Play] Failed to start stream for guild ${guildId} - not connected to voice`);

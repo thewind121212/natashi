@@ -37,7 +37,7 @@ vi.mock('../../socket-client', () => ({
       isConnected: vi.fn().mockReturnValue(true),
       connect: vi.fn().mockResolvedValue(undefined),
       on: vi.fn(),
-      createDirectStreamForSession: vi.fn().mockReturnValue({
+      createAudioStreamForSession: vi.fn().mockReturnValue({
         on: vi.fn(),
         push: vi.fn(),
         end: vi.fn(),

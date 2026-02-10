@@ -164,7 +164,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // Clear suppress flag after new track is ready (prevents leak to next natural finish)
     session.suppressAutoAdvanceFor.delete(guildId);
 
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);
     if (!success) {
       await interaction.editReply({ content: 'Failed to play - not connected to voice channel' });
