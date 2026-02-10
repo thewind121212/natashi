@@ -12,6 +12,9 @@ export const config = {
   // Debug mode
   debugAudio: process.env.DEBUG_AUDIO === '1',
 
+  // App base URL (SPA domain, used for OAuth redirect)
+  appBaseUrl: process.env.APP_BASE_URL ?? '',
+
   // Discord OAuth2
   discordClientId: process.env.DISCORD_CLIENT_ID ?? '',
   discordClientSecret: process.env.DISCORD_CLIENT_SECRET ?? '',

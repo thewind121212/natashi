@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useWebSocket, type Track, type SearchResult } from '@/hooks/useWebSocket';
-import { useAuth } from '../contexts/AuthContext';
+import { usePlayer } from '@/contexts/PlayerContext';
+import type { Track, SearchResult } from '@/hooks/useWebSocket';
 import { AppHeader } from '@/components/AppHeader';
 import {
   Play,
@@ -569,7 +569,6 @@ export default function AudioPlay() {
   const progressBarRectRef = useRef<DOMRect | null>(null);
   const searchTimerRef = useRef<number | null>(null);
   const lastSearchQueryRef = useRef('');
-  const { forceLogout } = useAuth();
 
   const {
     isConnected,
@@ -600,7 +599,7 @@ export default function AudioPlay() {
     setVolume,
     resetSession,
     seek,
-  } = useWebSocket({ onUnauthorized: forceLogout });
+  } = usePlayer();
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);

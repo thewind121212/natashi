@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Check if user is already authenticated
-    fetch(`${apiBase}/auth/me`)
+    fetch(`${apiBase}/auth/me`, { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         if (data.user) {
@@ -54,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      await fetch(`${apiBase}/auth/logout`, { method: 'POST' });
+      await fetch(`${apiBase}/auth/logout`, { method: 'POST', credentials: 'include' });
       setUser(null);
       // Reload to clear any cached state
       window.location.reload();

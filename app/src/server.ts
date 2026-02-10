@@ -1,6 +1,5 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
-import * as path from 'path';
 import * as crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import { Client } from 'discord.js';
@@ -25,9 +24,6 @@ export function createServer(getDiscordClient: () => Client | null): Express {
   // Parse JSON body and cookies
   app.use(express.json());
   app.use(cookieParser());
-
-  // Serve static files from public directory
-  app.use(express.static(path.join(__dirname, '../public')));
 
   // Health check endpoint
   app.get('/health', (_req, res) => {
@@ -85,7 +81,7 @@ export function createServer(getDiscordClient: () => Client | null): Express {
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
       });
       res.clearCookie('oauth_state');
-      res.redirect('/');
+      res.redirect(config.appBaseUrl || '/');
     } catch (err) {
       console.error('[Auth] OAuth callback error:', err);
       res.status(500).send('Authentication failed');
@@ -214,12 +210,6 @@ export function createServer(getDiscordClient: () => Client | null): Express {
 
   // === Bot Controller API ===
   app.use('/api/bot', createBotRouter(getDiscordClient));
-
-  // === SPA Catch-All Route ===
-  // Must be LAST - serves index.html for any non-API routes (React Router handles client-side)
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(__dirname, '../public/index.html'));
-  });
 
   return app;
 }

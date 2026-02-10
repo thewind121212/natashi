@@ -49,7 +49,7 @@ interface WebSocketMessage {
   requestId?: number;
 }
 
-interface UseWebSocketReturn {
+export interface UseWebSocketReturn {
   isConnected: boolean;
   debugMode: boolean;
   webMode: boolean;
