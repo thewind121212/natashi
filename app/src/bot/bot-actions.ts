@@ -365,12 +365,13 @@ export async function botSkip(guildId: string, channelId?: string): Promise<BotA
     return { success: false, error: 'A track change is already in progress' };
   }
 
+  session.isTransitioning = true;
+
   const nextTrack = session.queueManager.skip();
   if (!nextTrack) {
+    session.isTransitioning = false;
     return { success: false, error: 'No more tracks in the queue' };
   }
-
-  session.isTransitioning = true;
   try {
     const result = await startTrackOnGuild(guildId, session, nextTrack, { channelId });
     return result;
@@ -390,12 +391,13 @@ export async function botPrevious(guildId: string, channelId?: string): Promise<
     return { success: false, error: 'A track change is already in progress' };
   }
 
+  session.isTransitioning = true;
+
   const prevTrack = session.queueManager.previous();
   if (!prevTrack) {
+    session.isTransitioning = false;
     return { success: false, error: 'Already at the beginning of the queue' };
   }
-
-  session.isTransitioning = true;
   try {
     const result = await startTrackOnGuild(guildId, session, prevTrack, { channelId });
     return result;
@@ -449,12 +451,13 @@ export async function botJump(guildId: string, index: number, channelId?: string
     return { success: false, error: 'Already playing this track' };
   }
 
+  session.isTransitioning = true;
+
   const track = session.queueManager.startPlaying(index);
   if (!track) {
+    session.isTransitioning = false;
     return { success: false, error: 'Failed to jump to track' };
   }
-
-  session.isTransitioning = true;
   try {
     const result = await startTrackOnGuild(guildId, session, track, { channelId });
     return result;

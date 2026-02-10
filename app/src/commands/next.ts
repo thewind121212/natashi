@@ -49,18 +49,21 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  // Lock transition + suppress auto-advance BEFORE queue mutation
+  session.isTransitioning = true;
+  session.suppressAutoAdvanceFor.add(guildId);
+
   const nextTrack = session.queueManager.skip();
 
   if (!nextTrack) {
+    session.isTransitioning = false;
+    session.suppressAutoAdvanceFor.delete(guildId);
     await interaction.reply({
       content: 'No more tracks in the queue.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
-
-  // Lock transition BEFORE any async operation (prevents race with concurrent commands)
-  session.isTransitioning = true;
 
   // Show embed immediately (fast response to user)
   const embed = new EmbedBuilder()
@@ -91,8 +94,7 @@ async function startNextTrack(
   if (!session || !nextTrack) return;
 
   try {
-    // Stop current playback (suppress auto-advance since we already advanced)
-    session.suppressAutoAdvanceFor.add(guildId);
+    // Stop current playback
     voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);

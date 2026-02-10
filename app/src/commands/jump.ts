@@ -79,18 +79,21 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  // Lock transition + suppress auto-advance BEFORE queue mutation
+  session.isTransitioning = true;
+  session.suppressAutoAdvanceFor.add(guildId);
+
   const track = session.queueManager.startPlaying(targetIndex);
 
   if (!track) {
+    session.isTransitioning = false;
+    session.suppressAutoAdvanceFor.delete(guildId);
     await interaction.reply({
       content: 'Failed to jump to that track.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
-
-  // Lock transition BEFORE any async operation
-  session.isTransitioning = true;
 
   // Show embed immediately (fast response to user)
   const embed = new EmbedBuilder()
@@ -120,8 +123,7 @@ async function startJumpTrack(
   if (!session || !track) return;
 
   try {
-    // Stop current playback (suppress auto-advance since we set the index manually)
-    session.suppressAutoAdvanceFor.add(guildId);
+    // Stop current playback
     voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);

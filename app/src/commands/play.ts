@@ -393,36 +393,47 @@ function setupEventHandlers(): void {
         return;
       }
 
-      // Check if auto-advance should be suppressed (skip/previous already handled it)
+      // Check if auto-advance should be suppressed (skip/previous/jump already handled it)
       if (session.suppressAutoAdvanceFor.has(event.session_id)) {
         session.suppressAutoAdvanceFor.delete(event.session_id);
-        console.log(`[Play] Auto-advance suppressed for ${event.session_id.slice(0, 8)}`);
         return;
       }
 
-      // Gracefully end stream and wait for Discord to consume remaining buffered audio
-      // This prevents cutting off the last few seconds of the track
-      socketClient.gracefulEndStreamForSession(event.session_id);
-      const safeToAdvance = await voiceManager.waitForIdle(event.session_id);
-
-      if (!safeToAdvance) {
-        // Player is still playing - don't advance yet, it will finish naturally
-        // and trigger another finished event or go idle on its own
-        console.log(`[Play] Not safe to advance yet for ${event.session_id.slice(0, 8)}, waiting for natural finish`);
+      // Skip if a command is already handling track transition
+      if (session.isTransitioning) {
         return;
       }
 
-      // Auto-advance to next track
-      const nextTrack = session.queueManager.currentFinished();
-      if (nextTrack) {
-        console.log(`[Play] Auto-advancing to: ${nextTrack.title}`);
-        await playTrack(event.session_id, nextTrack, true); // Send "Now Playing" message
-      } else {
-        // Queue finished
-        console.log(`[Play] Queue finished for guild ${event.session_id.slice(0, 8)}`);
-        socketClient.endAudioStreamForSession(event.session_id);
-        voiceManager.stop(event.session_id);
-        session.currentTrack = null;
+      // Lock transition to prevent commands from interfering during advance
+      session.isTransitioning = true;
+
+      try {
+        socketClient.gracefulEndStreamForSession(event.session_id);
+        const safeToAdvance = await voiceManager.waitForIdle(event.session_id);
+
+        if (!safeToAdvance) {
+          return;
+        }
+
+        // Re-check after wait — a command may have taken over during waitForIdle
+        if (session.suppressAutoAdvanceFor.has(event.session_id)) {
+          session.suppressAutoAdvanceFor.delete(event.session_id);
+          return;
+        }
+
+        // Auto-advance to next track
+        const nextTrack = session.queueManager.currentFinished();
+        if (nextTrack) {
+          console.log(`[Play] Auto-advancing to: ${nextTrack.title}`);
+          await playTrack(event.session_id, nextTrack, true);
+        } else {
+          console.log(`[Play] Queue finished for guild ${event.session_id.slice(0, 8)}`);
+          socketClient.endAudioStreamForSession(event.session_id);
+          voiceManager.stop(event.session_id);
+          session.currentTrack = null;
+        }
+      } finally {
+        session.isTransitioning = false;
       }
     }
   });

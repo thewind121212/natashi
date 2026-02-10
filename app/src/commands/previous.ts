@@ -49,18 +49,21 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  // Lock transition + suppress auto-advance BEFORE queue mutation
+  session.isTransitioning = true;
+  session.suppressAutoAdvanceFor.add(guildId);
+
   const prevTrack = session.queueManager.previous();
 
   if (!prevTrack) {
+    session.isTransitioning = false;
+    session.suppressAutoAdvanceFor.delete(guildId);
     await interaction.reply({
       content: 'Already at the beginning of the queue.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
-
-  // Lock transition BEFORE any async operation
-  session.isTransitioning = true;
 
   // Show embed immediately (fast response to user)
   const embed = new EmbedBuilder()
@@ -91,8 +94,7 @@ async function startPrevTrack(
   if (!session || !prevTrack) return;
 
   try {
-    // Stop current playback (suppress auto-advance since we already moved)
-    session.suppressAutoAdvanceFor.add(guildId);
+    // Stop current playback
     voiceManager.stop(guildId);
     socketClient.endAudioStreamForSession(guildId);
     await apiClient.stop(guildId);
