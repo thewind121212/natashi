@@ -51,7 +51,7 @@ func (p *FFmpegPipeline) Start(ctx context.Context, streamURL string, format For
 	ctx, p.cancel = context.WithCancel(ctx)
 
 	switch format {
-	case FormatWeb:
+	case FormatWeb, FormatOpus:
 		p.readBufferSize = 4096
 	default:
 		p.readBufferSize = 16384
@@ -199,7 +199,9 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec f
 			"-compression_level", "10", // Max compression quality
 			"-frame_duration", "20", // 20ms frames (Discord standard)
 			"-application", "audio", // Optimize for music
-			"-f", "opus",
+			"-f", "ogg", // OGG container for proper page-level framing
+			"-page_duration", "20000", // 20ms OGG pages (one Opus frame per page)
+			"-flush_packets", "1", // Flush after each page for smooth delivery
 			"pipe:1",
 		)
 	case FormatWeb:
