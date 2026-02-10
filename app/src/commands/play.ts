@@ -266,6 +266,10 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
     return;
   }
 
+  // Bump play request ID to invalidate any in-flight playTrack calls
+  session.playRequestId++;
+  const myRequestId = session.playRequestId;
+
   // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
   if (isSpotifySearchUrl(track.url)) {
     console.log(`[Play] Resolving Spotify track: ${track.title}`);
@@ -335,6 +339,13 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
   try {
     // Wait for Go to be ready (yt-dlp done, FFmpeg started)
     await readyPromise;
+
+    // Check if this playTrack was superseded by a newer play request
+    if (session.playRequestId !== myRequestId) {
+      console.log(`[Play] playTrack superseded (request ${myRequestId} vs current ${session.playRequestId}), aborting`);
+      return;
+    }
+
     console.log(`[Play] Go is ready, creating stream for Discord`);
 
     // NOW create stream and start Discord playback

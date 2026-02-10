@@ -104,6 +104,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   let suppressAutoAdvance = false;
 
+  // Bump play request ID to invalidate any in-flight playTrack (e.g., auto-advance)
+  session.playRequestId++;
+  const myRequestId = session.playRequestId;
+
   try {
     session.transitionOwner = 'user';
     await interaction.deferReply();
@@ -159,6 +163,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await apiClient.play(guildId, playUrl, 'opus', seekSeconds, playDuration);
 
     await readyPromise;
+
+    // Check if this request was superseded by a newer play request
+    if (session.playRequestId !== myRequestId) {
+      console.log(`[Seek] Superseded (request ${myRequestId} vs current ${session.playRequestId}), aborting`);
+      return;
+    }
+
     console.log(`[Seek] Go is ready, creating stream for Discord`);
 
     // Clear suppress flag after new track is ready (prevents leak to next natural finish)

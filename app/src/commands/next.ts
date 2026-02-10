@@ -94,6 +94,10 @@ async function startNextTrack(
 ): Promise<void> {
   if (!session || !nextTrack) return;
 
+  // Bump play request ID to invalidate any in-flight playTrack (e.g., auto-advance)
+  session.playRequestId++;
+  const myRequestId = session.playRequestId;
+
   try {
     // Stop current playback
     voiceManager.stop(guildId);
@@ -153,6 +157,13 @@ async function startNextTrack(
 
     // Wait for Go to be ready
     await readyPromise;
+
+    // Check if this request was superseded by a newer play request
+    if (session.playRequestId !== myRequestId) {
+      console.log(`[Next] Superseded (request ${myRequestId} vs current ${session.playRequestId}), aborting`);
+      return;
+    }
+
     console.log(`[Next] Go is ready, creating stream for Discord`);
 
     // Clear suppress flag

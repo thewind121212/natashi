@@ -93,6 +93,10 @@ async function startPrevTrack(
 ): Promise<void> {
   if (!session || !prevTrack) return;
 
+  // Bump play request ID to invalidate any in-flight playTrack (e.g., auto-advance)
+  session.playRequestId++;
+  const myRequestId = session.playRequestId;
+
   try {
     // Stop current playback
     voiceManager.stop(guildId);
@@ -149,6 +153,12 @@ async function startPrevTrack(
 
     await apiClient.play(guildId, track.url, 'opus', undefined, track.duration);
     await readyPromise;
+
+    // Check if this request was superseded by a newer play request
+    if (session.playRequestId !== myRequestId) {
+      console.log(`[Previous] Superseded (request ${myRequestId} vs current ${session.playRequestId}), aborting`);
+      return;
+    }
 
     // Clear suppress flag
     session.suppressAutoAdvanceFor.delete(guildId);
