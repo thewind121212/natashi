@@ -207,7 +207,7 @@ export interface GuildStateResponse {
   queue: Track[];
   currentIndex: number;
   isPaused: boolean;
-  isTransitioning: boolean;
+  isTransitioning: boolean; // true when any transition is in progress (for API compatibility)
   playbackTime: number;
   hasNext: boolean;
   hasPrevious: boolean;
@@ -361,15 +361,15 @@ export async function botSkip(guildId: string, channelId?: string): Promise<BotA
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
   }
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     return { success: false, error: 'A track change is already in progress' };
   }
 
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
 
   const nextTrack = session.queueManager.skip();
   if (!nextTrack) {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
     return { success: false, error: 'No more tracks in the queue' };
   }
   try {
@@ -378,7 +378,7 @@ export async function botSkip(guildId: string, channelId?: string): Promise<BotA
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 
@@ -387,15 +387,15 @@ export async function botPrevious(guildId: string, channelId?: string): Promise<
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
   }
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     return { success: false, error: 'A track change is already in progress' };
   }
 
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
 
   const prevTrack = session.queueManager.previous();
   if (!prevTrack) {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
     return { success: false, error: 'Already at the beginning of the queue' };
   }
   try {
@@ -404,7 +404,7 @@ export async function botPrevious(guildId: string, channelId?: string): Promise<
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 
@@ -413,7 +413,7 @@ export async function botSeek(guildId: string, positionSec: number, channelId?: 
   if (!session || !session.currentTrack || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
   }
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     return { success: false, error: 'A track change is already in progress' };
   }
   if (positionSec < 0) {
@@ -423,14 +423,14 @@ export async function botSeek(guildId: string, positionSec: number, channelId?: 
     return { success: false, error: 'Seek position beyond track duration' };
   }
 
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
   try {
     const result = await startTrackOnGuild(guildId, session, session.currentTrack, { startAt: positionSec, channelId });
     return result;
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 
@@ -439,7 +439,7 @@ export async function botJump(guildId: string, index: number, channelId?: string
   if (!session || !voiceManager.isConnected(guildId)) {
     return { success: false, error: 'Nothing is playing' };
   }
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     return { success: false, error: 'A track change is already in progress' };
   }
 
@@ -451,11 +451,11 @@ export async function botJump(guildId: string, index: number, channelId?: string
     return { success: false, error: 'Already playing this track' };
   }
 
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
 
   const track = session.queueManager.startPlaying(index);
   if (!track) {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
     return { success: false, error: 'Failed to jump to track' };
   }
   try {
@@ -464,7 +464,7 @@ export async function botJump(guildId: string, index: number, channelId?: string
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 
@@ -717,7 +717,7 @@ export function getGuildState(guildId: string, client: Client): GuildStateRespon
     queue: session.queueManager.getQueue(),
     currentIndex: session.queueManager.getCurrentIndex(),
     isPaused: session.isPaused,
-    isTransitioning: session.isTransitioning,
+    isTransitioning: session.transitionOwner !== 'none',
     playbackTime,
     hasNext: session.queueManager.hasNext(),
     hasPrevious: session.queueManager.hasPrevious(),

@@ -399,23 +399,28 @@ function setupEventHandlers(): void {
         return;
       }
 
-      // Skip if a command is already handling track transition
-      if (session.isTransitioning) {
+      // Skip if any transition is already happening (user command or another auto-advance)
+      if (session.transitionOwner !== 'none') {
         return;
       }
 
-      // Lock transition to prevent commands from interfering during advance
-      session.isTransitioning = true;
+      // Lock as auto-advance — user commands can override this
+      session.transitionOwner = 'auto';
 
       try {
         socketClient.gracefulEndStreamForSession(event.session_id);
         const safeToAdvance = await voiceManager.waitForIdle(event.session_id);
 
+        // After wait: bail if a user command took over during waitForIdle
+        if (session.transitionOwner !== 'auto') {
+          return;
+        }
+
         if (!safeToAdvance) {
           return;
         }
 
-        // Re-check after wait — a command may have taken over during waitForIdle
+        // Re-check suppress flag — a command may have set it during the wait
         if (session.suppressAutoAdvanceFor.has(event.session_id)) {
           session.suppressAutoAdvanceFor.delete(event.session_id);
           return;
@@ -433,7 +438,10 @@ function setupEventHandlers(): void {
           session.currentTrack = null;
         }
       } finally {
-        session.isTransitioning = false;
+        // Only clear if we still own the transition (user command may have taken over)
+        if (session.transitionOwner === 'auto') {
+          session.transitionOwner = 'none';
+        }
       }
     }
   });

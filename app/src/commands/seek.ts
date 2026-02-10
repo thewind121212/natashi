@@ -73,7 +73,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     await interaction.reply({
       content: 'A track change is already in progress, please wait.',
       flags: MessageFlags.Ephemeral,
@@ -105,7 +105,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   let suppressAutoAdvance = false;
 
   try {
-    session.isTransitioning = true;
+    session.transitionOwner = 'user';
     await interaction.deferReply();
 
     // Stop current playback (suppress auto-advance since we're re-playing same track)
@@ -201,7 +201,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       });
     }
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 

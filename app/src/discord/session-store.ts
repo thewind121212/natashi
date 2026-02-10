@@ -3,11 +3,13 @@
 
 import { QueueManager, Track } from '../queue-manager';
 
+export type TransitionOwner = 'none' | 'auto' | 'user';
+
 export interface GuildSession {
   guildId: string;
   textChannelId: string | null; // For sending "Now Playing" messages on auto-advance
   isPaused: boolean;
-  isTransitioning: boolean; // Prevents concurrent skip/previous race conditions
+  transitionOwner: TransitionOwner; // Who owns the current transition ('none' = idle, 'auto' = auto-advance, 'user' = command)
   currentTrack: Track | null;
   queueManager: QueueManager;
   playRequestId: number;
@@ -27,7 +29,7 @@ export class DiscordSessionStore {
         guildId,
         textChannelId: null,
         isPaused: false,
-        isTransitioning: false,
+        transitionOwner: 'none',
         currentTrack: null,
         queueManager: new QueueManager(),
         playRequestId: 0,
@@ -49,7 +51,7 @@ export class DiscordSessionStore {
     const session = this.sessions.get(guildId);
     if (session) {
       session.isPaused = false;
-      session.isTransitioning = false;
+      session.transitionOwner = 'none';
       session.currentTrack = null;
       session.queueManager.clear();
       session.playRequestId = 0;

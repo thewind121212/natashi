@@ -48,7 +48,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Prevent concurrent transitions
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     await interaction.reply({
       content: 'A track change is already in progress, please wait.',
       flags: MessageFlags.Ephemeral,
@@ -80,13 +80,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Lock transition + suppress auto-advance BEFORE queue mutation
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
   session.suppressAutoAdvanceFor.add(guildId);
 
   const track = session.queueManager.startPlaying(targetIndex);
 
   if (!track) {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
     session.suppressAutoAdvanceFor.delete(guildId);
     await interaction.reply({
       content: 'Failed to jump to that track.',
@@ -192,7 +192,7 @@ async function startJumpTrack(
     console.error('[Jump] Error starting track:', error);
     session.suppressAutoAdvanceFor.delete(guildId);
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 

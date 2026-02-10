@@ -41,7 +41,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Prevent concurrent transitions (rapid commands)
-  if (session.isTransitioning) {
+  if (session.transitionOwner === 'user') {
     await interaction.reply({
       content: 'A track change is already in progress, please wait.',
       flags: MessageFlags.Ephemeral,
@@ -50,13 +50,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Lock transition + suppress auto-advance BEFORE queue mutation
-  session.isTransitioning = true;
+  session.transitionOwner = 'user';
   session.suppressAutoAdvanceFor.add(guildId);
 
   const prevTrack = session.queueManager.previous();
 
   if (!prevTrack) {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
     session.suppressAutoAdvanceFor.delete(guildId);
     await interaction.reply({
       content: 'Already at the beginning of the queue.',
@@ -163,7 +163,7 @@ async function startPrevTrack(
     console.error('[Previous] Error starting track:', error);
     session.suppressAutoAdvanceFor.delete(guildId);
   } finally {
-    session.isTransitioning = false;
+    session.transitionOwner = 'none';
   }
 }
 
