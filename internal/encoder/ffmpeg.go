@@ -161,6 +161,9 @@ func (p *FFmpegPipeline) buildArgs(streamURL string, format Format, startAtSec f
 		"-reconnect_on_http_error", "4xx,5xx",
 		"-reconnect_delay_max", "5",
 		"-multiple_requests", "1",
+		// HTTP headers to reduce YouTube CDN connection resets
+		"-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+		"-referer", "https://www.youtube.com/",
 	}
 
 	if startAtSec > 0 {
