@@ -1,10 +1,12 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from './components/LoginPage';
-import AudioPlay from './pages/AudioPlay';
-import BotController from './pages/BotController';
 import { Loader2 } from 'lucide-react';
 import './App.css';
+
+const AudioPlay = lazy(() => import('./pages/AudioPlay'));
+const BotController = lazy(() => import('./pages/BotController'));
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -22,10 +24,18 @@ function AppContent() {
   }
 
   return (
-    <Routes>
-      <Route path="/" element={<AudioPlay />} />
-      <Route path="/bot" element={<BotController />} />
-    </Routes>
+    <Suspense
+      fallback={(
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+          <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+        </div>
+      )}
+    >
+      <Routes>
+        <Route path="/" element={<AudioPlay />} />
+        <Route path="/bot" element={<BotController />} />
+      </Routes>
+    </Suspense>
   );
 }
 

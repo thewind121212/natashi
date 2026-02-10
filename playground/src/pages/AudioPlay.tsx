@@ -211,7 +211,7 @@ interface ProgressBarProps {
   isDragging: boolean;
   displayTime: number;
   duration: number;
-  progressBarRef: React.RefObject<HTMLButtonElement>;
+  progressBarRef: React.RefObject<HTMLButtonElement | null>;
   onMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onTouchStart: (e: React.TouchEvent<HTMLButtonElement>) => void;
 }
@@ -261,7 +261,7 @@ interface PlayerControlsProps {
   displayTime: number;
   duration: number;
   isDragging: boolean;
-  progressBarRef: React.RefObject<HTMLButtonElement>;
+  progressBarRef: React.RefObject<HTMLButtonElement | null>;
   onProgressMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onProgressTouchStart: (e: React.TouchEvent<HTMLButtonElement>) => void;
   onPlayPause: () => void;

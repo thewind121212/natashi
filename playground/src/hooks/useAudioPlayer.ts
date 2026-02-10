@@ -1,5 +1,5 @@
 import { useRef, useCallback } from 'react';
-import { OggOpusDecoder } from 'ogg-opus-decoder';
+import type { OggOpusDecoder } from 'ogg-opus-decoder';
 
 interface UseAudioPlayerOptions {
   onProgress?: (seconds: number) => void;
@@ -59,6 +59,7 @@ export function useAudioPlayer({ onProgress }: UseAudioPlayerOptions = {}): UseA
     gainNodeRef.current.gain.value = volumeRef.current;
     gainNodeRef.current.connect(audioContextRef.current.destination);
 
+    const { OggOpusDecoder } = await import('ogg-opus-decoder');
     decoderRef.current = new OggOpusDecoder({ forceStereo: true });
     await decoderRef.current.ready;
     initializedRef.current = true;
