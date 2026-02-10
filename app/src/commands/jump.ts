@@ -130,7 +130,7 @@ async function startJumpTrack(
     let resolvedTrack = track;
     if (isSpotifySearchUrl(resolvedTrack.url)) {
       console.log(`[Jump] Resolving Spotify track: ${resolvedTrack.title}`);
-      const resolved = await resolveSpotifySearch(resolvedTrack.url);
+      const resolved = await resolveSpotifySearch(resolvedTrack.url, resolvedTrack.duration);
       if (!resolved) {
         console.log(`[Jump] Failed to resolve Spotify track: ${resolvedTrack.title}, skipping...`);
         // Auto-advance to next track

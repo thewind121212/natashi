@@ -255,7 +255,7 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
     if (isSpotifySearchUrl(track.url)) {
       console.log(`[BotActions] Resolving Spotify track: ${track.title}`);
-      const resolved = await resolveSpotifySearch(track.url);
+      const resolved = await resolveSpotifySearch(track.url, track.duration);
       if (!resolved) {
         console.log(`[BotActions] Failed to resolve Spotify track: ${track.title}, skipping...`);
         session.suppressAutoAdvanceFor.delete(guildId);

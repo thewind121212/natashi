@@ -22,18 +22,24 @@ export interface SpotifyTrackInfo {
   thumbnail: string;
 }
 
-interface SpotifyOEmbed {
-  title: string;
-  thumbnail_url?: string;
-  type: string;
-}
-
 interface SpotifyEmbedTrack {
   uri: string;
   title: string;
   subtitle: string;
   duration: number;
   isPlayable: boolean;
+}
+
+interface SpotifyEmbedEntity {
+  type: string;
+  name: string;
+  title: string;
+  uri: string;
+  duration?: number;
+  isPlayable?: boolean;
+  artists?: Array<{ name: string }>;
+  trackList?: SpotifyEmbedTrack[];
+  visualIdentity?: { image?: Array<{ url: string }> };
 }
 
 export const SPOTIFY_SEARCH_PREFIX = 'spotify:search:';
@@ -70,44 +76,46 @@ export function buildSpotifySearchUrl(title: string, artist: string): string {
   return `${SPOTIFY_SEARCH_PREFIX}${query}`;
 }
 
+// Scrape embed page __NEXT_DATA__ — works for track, playlist, and album
+// Returns entity with full metadata (title, artists, duration, thumbnail)
+async function fetchEmbedEntity(spotifyUrl: string): Promise<SpotifyEmbedEntity | null> {
+  const embedPath = getSpotifyEmbedPath(spotifyUrl);
+  if (!embedPath) return null;
+
+  const response = await fetch(`https://open.spotify.com/embed/${embedPath}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  });
+  if (!response.ok) return null;
+
+  const html = await response.text();
+  const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+  if (!scriptMatch) return null;
+
+  const json = JSON.parse(scriptMatch[1]);
+  return json?.props?.pageProps?.state?.data?.entity || null;
+}
+
 // Fetch Spotify track metadata — fast, no YouTube resolution
-// Single track: uses oEmbed (~200ms)
-// Playlist/album: uses embed page __NEXT_DATA__ (~300ms)
+// Uses embed page __NEXT_DATA__ for all types (track/playlist/album) ~300ms
 export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrackInfo[]> {
   const type = getSpotifyType(spotifyUrl);
   if (!type) return [];
 
-  if (type === 'track') {
-    try {
-      const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`;
-      const response = await fetch(oembedUrl);
-      if (!response.ok) return [];
-      const data = (await response.json()) as SpotifyOEmbed;
-      if (!data?.title) return [];
-      // oEmbed title is "Track Name - Artist", thumbnail_url is album art
-      return [{ title: data.title, artist: '', durationMs: 0, thumbnail: data.thumbnail_url || '' }];
-    } catch {
-      return [];
-    }
-  }
-
-  // Playlist or album: scrape embed page
-  const embedPath = getSpotifyEmbedPath(spotifyUrl);
-  if (!embedPath) return [];
-
   try {
-    const response = await fetch(`https://open.spotify.com/embed/${embedPath}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
-    if (!response.ok) return [];
+    const entity = await fetchEmbedEntity(spotifyUrl);
+    if (!entity) return [];
 
-    const html = await response.text();
-    const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
-    if (!scriptMatch) return [];
+    // Single track: entity has name, artists, duration directly
+    if (type === 'track') {
+      const title = entity.title || entity.name || '';
+      if (!title) return [];
+      const artist = entity.artists?.map((a) => a.name).join(', ') || '';
+      const thumbnail = entity.visualIdentity?.image?.[0]?.url || '';
+      return [{ title, artist, durationMs: entity.duration || 0, thumbnail }];
+    }
 
-    const json = JSON.parse(scriptMatch[1]);
-    const entity = json?.props?.pageProps?.state?.data?.entity;
-    const trackList = entity?.trackList;
+    // Playlist or album: entity has trackList
+    const trackList = entity.trackList;
     if (!Array.isArray(trackList)) return [];
 
     const tracks = trackList
@@ -120,13 +128,12 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
         _spotifyId: t.uri?.split(':').pop() || '',
       }));
 
-    // Batch-fetch per-track album art via oEmbed (parallel)
+    // Batch-fetch per-track album art via embed page (parallel)
     const thumbResults = await Promise.allSettled(
       tracks.map((t) =>
         t._spotifyId
-          ? fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/track/${t._spotifyId}`)
-              .then((r) => r.json())
-              .then((d) => (d as SpotifyOEmbed).thumbnail_url || '')
+          ? fetchEmbedEntity(`https://open.spotify.com/track/${t._spotifyId}`)
+              .then((e) => e?.visualIdentity?.image?.[0]?.url || '')
           : Promise.resolve(''),
       ),
     );
@@ -144,19 +151,64 @@ export async function getSpotifyTracks(spotifyUrl: string): Promise<SpotifyTrack
 
 const RESOLVE_TIMEOUT_MS = 5_000; // 5s timeout for YouTube search
 
+const PENALTY_KEYWORDS = ['cover', 'remix', 'karaoke', 'instrumental', 'reaction', 'tutorial', '8d audio', 'slowed', 'reverb', 'sped up', 'nightcore', 'bass boosted', 'lofi'];
+
+interface ScoredVideo {
+  id: string;
+  title: string;
+  duration: number;
+  score: number;
+}
+
+function scoreCandidate(
+  video: { id: string; type: string; title: string; length?: { simpleText: string } },
+  query: string,
+  expectedDurationSec?: number,
+): ScoredVideo {
+  const ytDuration = parseDuration(video.length?.simpleText || '');
+  const title = (video.title || '').toLowerCase();
+  const queryLower = query.toLowerCase();
+  let score = 0;
+
+  // Duration match — strongest signal when available
+  if (expectedDurationSec && expectedDurationSec > 0 && ytDuration > 0) {
+    const diff = Math.abs(ytDuration - expectedDurationSec);
+    if (diff <= 3) score += 50;       // Near exact
+    else if (diff <= 10) score += 30;  // Close
+    else if (diff <= 30) score += 10;  // Reasonable
+    else score -= 20;                  // Likely wrong version
+  }
+
+  // Prefer official content
+  if (title.includes('official') && title.includes('audio')) score += 15;
+  else if (title.includes('official')) score += 10;
+  else if (title.includes('audio')) score += 5;
+
+  // Penalize unwanted versions (unless the query itself contains the keyword)
+  for (const keyword of PENALTY_KEYWORDS) {
+    if (title.includes(keyword) && !queryLower.includes(keyword)) score -= 15;
+  }
+
+  // Penalize very long videos (compilations, mixes)
+  if (ytDuration > 600 && (!expectedDurationSec || expectedDurationSec < 600)) score -= 25;
+
+  return { id: video.id, title: video.title || query, duration: ytDuration, score };
+}
+
 // Resolve a single spotify:search: URL to a YouTube track
-// Called just before playback — ~500ms for one YouTube search, 10s timeout
-export async function resolveSpotifySearch(searchUrl: string): Promise<ResolvedTrack | null> {
+// Called just before playback — ~500ms for one YouTube search
+// expectedDurationSec: Spotify track duration for better matching
+export async function resolveSpotifySearch(searchUrl: string, expectedDurationSec?: number): Promise<ResolvedTrack | null> {
   if (!searchUrl.startsWith(SPOTIFY_SEARCH_PREFIX)) return null;
   const query = searchUrl.slice(SPOTIFY_SEARCH_PREFIX.length);
   if (!query) return null;
 
-  console.log(`[Spotify] Resolving: "${query}"`);
+  console.log(`[Spotify] Resolving: "${query}"${expectedDurationSec ? ` (expected ~${expectedDurationSec}s)` : ''}`);
 
   try {
     const result = await Promise.race([
       (async () => {
-        const results = await YouTubeSearch.GetListByKeyword(query, false, 5);
+        const results = await YouTubeSearch.GetListByKeyword(query, false, 10);
         const items = results?.items as
           | Array<{
               id: string;
@@ -165,14 +217,21 @@ export async function resolveSpotifySearch(searchUrl: string): Promise<ResolvedT
               length?: { simpleText: string };
             }>
           | undefined;
-        const video = items?.find((item) => item.type === 'video');
-        if (!video) return null;
+        const videos = items?.filter((item) => item.type === 'video');
+        if (!videos?.length) return null;
+
+        // Score all candidates and pick the best match
+        const scored = videos.map((v) => scoreCandidate(v, query, expectedDurationSec));
+        scored.sort((a, b) => b.score - a.score);
+        const best = scored[0];
+
+        console.log(`[Spotify] Picked: "${best.title}" (score=${best.score}, duration=${best.duration}s) from ${scored.length} candidates`);
 
         return {
-          url: `https://www.youtube.com/watch?v=${video.id}`,
-          title: video.title || query,
-          duration: parseDuration(video.length?.simpleText || ''),
-          thumbnail: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+          url: `https://www.youtube.com/watch?v=${best.id}`,
+          title: best.title,
+          duration: best.duration,
+          thumbnail: `https://i.ytimg.com/vi/${best.id}/hqdefault.jpg`,
         } as ResolvedTrack;
       })(),
       new Promise<null>((_, reject) =>

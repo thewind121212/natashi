@@ -524,7 +524,7 @@ export class WebSocketHandler {
     // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
     if (isSpotifySearchUrl(url)) {
       this.log('nodejs', 'Resolving Spotify track to YouTube...', session.userId);
-      const resolved = await resolveSpotifySearch(url);
+      const resolved = await resolveSpotifySearch(url, duration);
       if (!resolved) {
         this.log('nodejs', 'Failed to resolve Spotify track, skipping...', session.userId);
         this.broadcastJsonToUser(session.userId, { type: 'error', message: 'Could not find this track on YouTube, skipping...' });

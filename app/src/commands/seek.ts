@@ -143,7 +143,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     let playUrl = track.url;
     let playDuration = track.duration;
     if (isSpotifySearchUrl(playUrl)) {
-      const resolved = await resolveSpotifySearch(playUrl);
+      const resolved = await resolveSpotifySearch(playUrl, playDuration);
       if (!resolved) {
         throw new Error('Could not find this track on YouTube');
       }

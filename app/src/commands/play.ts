@@ -269,7 +269,7 @@ async function playTrack(guildId: string, track: Track, sendNowPlaying = false):
   // Lazy Spotify resolution: resolve spotify:search: → YouTube URL just before playback
   if (isSpotifySearchUrl(track.url)) {
     console.log(`[Play] Resolving Spotify track: ${track.title}`);
-    const resolved = await resolveSpotifySearch(track.url);
+    const resolved = await resolveSpotifySearch(track.url, track.duration);
     if (!resolved) {
       console.log(`[Play] Failed to resolve Spotify track: ${track.title}, skipping...`);
       // Auto-advance to next track

@@ -101,7 +101,7 @@ async function startPrevTrack(
     let track = prevTrack;
     if (isSpotifySearchUrl(track.url)) {
       console.log(`[Previous] Resolving Spotify track: ${track.title}`);
-      const resolved = await resolveSpotifySearch(track.url);
+      const resolved = await resolveSpotifySearch(track.url, track.duration);
       if (!resolved) {
         console.log(`[Previous] Failed to resolve Spotify track: ${track.title}, skipping forward...`);
         // Auto-advance to next track (can't go back to an unresolvable track)
