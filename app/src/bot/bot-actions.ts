@@ -290,7 +290,7 @@ async function startTrackOnGuild(guildId: string, session: GuildSession, track: 
     // auto-advance.
     session.suppressAutoAdvanceFor.delete(guildId);
 
-    const audioStream = socketClient.createDirectStreamForSession(guildId);
+    const audioStream = socketClient.createAudioStreamForSession(guildId);
     const success = voiceManager.playStream(guildId, audioStream);
     if (!success) {
       return { success: false, error: 'Not connected to voice channel' };

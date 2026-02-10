@@ -5,7 +5,7 @@ import { PassThrough } from 'stream';
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
 // Jitter buffer configuration
-const JITTER_BUFFER_SIZE = 5;      // Buffer 5 frames before starting playback
+const JITTER_BUFFER_SIZE = 25;     // Buffer 25 frames (500ms) before starting playback — matches Lavalink
 const FRAME_INTERVAL_MS = 20;       // Output a frame every 20ms (Discord Opus standard)
 
 /**
