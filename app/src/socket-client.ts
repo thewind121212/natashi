@@ -4,85 +4,46 @@ import { PassThrough } from 'stream';
 
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
-// Jitter buffer configuration
-const JITTER_BUFFER_SIZE = 25;     // Buffer 25 frames (500ms) before starting playback — matches Lavalink
-const FRAME_INTERVAL_MS = 20;       // Output a frame every 20ms (Discord Opus standard)
+// Prebuffer configuration
+const PREBUFFER_SIZE = 25; // Buffer 25 frames (500ms) before starting playback — matches Lavalink
 
 /**
- * JitterBuffer smooths out variable audio chunk arrival times.
- * Buffers incoming chunks and outputs them at consistent intervals.
+ * JitterBuffer prebuffers incoming audio chunks before letting Discord consume them.
+ * After prebuffer fills, chunks pass straight through — Discord's own 20ms reader handles pacing.
+ * No setInterval needed; Discord is the sole timing authority.
  */
 class JitterBuffer {
-  private chunks: Buffer[] = [];
   private outputStream: PassThrough;
-  private interval: NodeJS.Timeout | null = null;
   private started = false;
-  private underruns = 0;
-  private consecutiveUnderruns = 0;
-  private totalFrames = 0;
+  private prebuffer: Buffer[] = [];
 
   constructor(outputStream: PassThrough) {
     this.outputStream = outputStream;
   }
 
   push(chunk: Buffer): void {
-    this.chunks.push(chunk);
+    if (this.outputStream.destroyed) return;
 
-    // Start outputting once we have enough buffered frames
-    if (!this.started && this.chunks.length >= JITTER_BUFFER_SIZE) {
-      this.start();
-    }
-  }
-
-  private start(): void {
-    if (this.started) return;
-    this.started = true;
-
-    this.interval = setInterval(() => {
-      this.outputFrame();
-    }, FRAME_INTERVAL_MS);
-  }
-
-  private outputFrame(): void {
-    if (this.outputStream.destroyed) {
-      this.stop();
+    if (!this.started) {
+      this.prebuffer.push(chunk);
+      if (this.prebuffer.length >= PREBUFFER_SIZE) {
+        this.started = true;
+        console.log(`[JitterBuffer] Prebuffer full (${this.prebuffer.length} frames), flushing to Discord`);
+        for (const buffered of this.prebuffer) {
+          this.outputStream.push(buffered);
+        }
+        this.prebuffer = [];
+      }
       return;
     }
 
-    const chunk = this.chunks.shift();
-    if (chunk) {
-      // Got data - reset consecutive counter, log recovery if needed
-      if (this.consecutiveUnderruns >= 10) {
-        console.log(`[JitterBuffer] Recovered after ${this.consecutiveUnderruns} underruns`);
-      }
-      this.consecutiveUnderruns = 0;
-      this.totalFrames++;
-      this.outputStream.push(chunk);
-    } else {
-      // Buffer underrun
-      this.underruns++;
-      this.consecutiveUnderruns++;
-      // Only log if sustained underrun (10+ consecutive = 200ms gap)
-      if (this.consecutiveUnderruns === 10) {
-        console.log(`[JitterBuffer] Sustained underrun detected (buffer starved)`);
-      }
-    }
+    // After prebuffer phase: pass through directly
+    this.outputStream.push(chunk);
   }
 
   stop(): void {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
     this.started = false;
-    this.chunks = [];
-    // Only log if underruns were significant (>1% of frames)
-    if (this.totalFrames > 0 && this.underruns > this.totalFrames * 0.01) {
-      console.log(`[JitterBuffer] Session end: ${this.underruns} underruns / ${this.totalFrames} frames (${(this.underruns / this.totalFrames * 100).toFixed(1)}%)`);
-    }
-    this.underruns = 0;
-    this.consecutiveUnderruns = 0;
-    this.totalFrames = 0;
+    this.prebuffer = [];
   }
 }
 
