@@ -5,7 +5,7 @@ import { PassThrough } from 'stream';
 const SOCKET_PATH = '/tmp/music-playground.sock';
 
 // Prebuffer configuration
-const PREBUFFER_SIZE = 50; // Buffer 50 frames (1s) before starting playback
+const PREBUFFER_SIZE = 15; // Buffer 15 frames (300ms) before starting playback
 
 /**
  * JitterBuffer prebuffers incoming audio chunks before letting Discord consume them.
