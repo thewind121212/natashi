@@ -51,6 +51,7 @@ const (
 	maxRetries          = 3               // Maximum retry attempts for premature stream endings
 	minPlayedForRetry   = 5 * time.Second // Minimum played time before considering retry
 	prematureEndingGap  = 10.0            // Seconds before expected end to consider premature
+	longPauseThreshold  = 30 * time.Minute // Re-extract stream URL if paused longer than this
 )
 
 // Session represents an active audio playback session.
@@ -68,10 +69,15 @@ type Session struct {
 	mu               sync.Mutex
 
 	// Auto-retry fields
-	expectedDuration float64   // Expected duration in seconds (from metadata)
-	streamStartTime  time.Time // When streaming started (for calculating played time)
-	retryCount       int       // Current retry attempt
-	isStopped        bool      // Explicitly stopped by user (don't retry)
+	expectedDuration   float64       // Expected duration in seconds (from metadata)
+	streamStartTime    time.Time     // When streaming started (for calculating played time)
+	retryCount         int           // Current retry attempt
+	isStopped          bool          // Explicitly stopped by user (don't retry)
+
+	// Long-pause recovery fields
+	pausedAt           time.Time     // When pause started (for measuring pause duration)
+	totalPauseDuration time.Duration // Accumulated pause time (for accurate play time)
+	restartEpoch       int           // Incremented on each long-pause restart; old goroutines compare to exit silently
 }
 
 // SessionManager manages active playback sessions.
@@ -169,6 +175,7 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 	session.mu.Lock()
 	session.Cancel = cancel
 	session.isStopped = false
+	myEpoch := session.restartEpoch
 	session.mu.Unlock()
 
 	session.SetState(StateExtracting)
@@ -250,16 +257,23 @@ func (m *SessionManager) runPlaybackWithRetry(session *Session, seekPosition flo
 	// Stream audio data
 	prematureEnd := m.streamAudio(session, sessionCtx)
 
-	// Check if we should retry
+	// Check if pipeline was replaced by a long-pause restart
 	session.mu.Lock()
+	currentEpoch := session.restartEpoch
 	stopped := session.isStopped
 	retries := session.retryCount
 	expectedDur := session.expectedDuration
+	totalPause := session.totalPauseDuration
 	session.mu.Unlock()
 
+	if currentEpoch != myEpoch {
+		fmt.Printf("[Session] Pipeline replaced by restart for %s (epoch %d→%d)\n", shortSessionID(session.ID), myEpoch, currentEpoch)
+		return
+	}
+
 	if prematureEnd && !stopped && retries < maxRetries {
-		// Calculate where we stopped
-		playedTime := time.Since(session.streamStartTime).Seconds()
+		// Calculate where we stopped (subtract pause time for accurate position)
+		playedTime := time.Since(session.streamStartTime).Seconds() - totalPause.Seconds()
 		newSeekPosition := seekPosition + playedTime
 
 		// Only retry if we played some content and haven't reached near the end
@@ -310,7 +324,7 @@ func (m *SessionManager) streamAudio(session *Session, ctx context.Context) (pre
 			if !ok {
 				// Channel closed - check if premature
 				session.mu.Lock()
-				playedTime := time.Since(session.streamStartTime).Seconds()
+				playedTime := time.Since(session.streamStartTime).Seconds() - session.totalPauseDuration.Seconds()
 				expectedDur := session.expectedDuration
 				stopped := session.isStopped
 				bytesSent := session.BytesSent
@@ -496,6 +510,7 @@ func (m *SessionManager) Pause(id string) error {
 		return nil // Already paused
 	}
 	session.isPaused = true
+	session.pausedAt = time.Now()
 
 	// Pause the pipeline (SIGSTOP to FFmpeg + drain buffer)
 	if session.Pipeline != nil {
@@ -522,7 +537,47 @@ func (m *SessionManager) Resume(id string) error {
 		return nil // Not paused
 	}
 
-	// Resume the pipeline (SIGCONT to FFmpeg)
+	pauseDuration := time.Since(session.pausedAt)
+	session.totalPauseDuration += pauseDuration
+
+	if pauseDuration >= longPauseThreshold {
+		// Long pause — YouTube stream URL likely expired.
+		// Calculate actual played time and restart pipeline from correct position.
+		var seekPosition float64
+		if session.streamStartTime.IsZero() {
+			// Paused before streaming started (e.g. web auto-pause during extraction)
+			seekPosition = session.StartAt
+		} else {
+			actualPlayed := time.Since(session.streamStartTime) - session.totalPauseDuration
+			seekPosition = session.StartAt + actualPlayed.Seconds()
+		}
+
+		fmt.Printf("[Session] Long pause (%.0fm) for %s, re-extracting from %.1fs\n",
+			pauseDuration.Minutes(), shortSessionID(id), seekPosition)
+
+		// Bump epoch so the old streamAudio goroutine exits silently
+		session.restartEpoch++
+		session.isPaused = false
+
+		// Kill old pipeline
+		if session.Cancel != nil {
+			session.Cancel()
+		}
+		if session.Pipeline != nil {
+			session.Pipeline.Stop()
+		}
+
+		// Prepare for fresh streaming period
+		session.retryCount = 1          // Treat as retry (skip duplicate "ready" event)
+		session.totalPauseDuration = 0  // Reset for new streaming period
+		session.mu.Unlock()
+
+		// Restart playback with fresh stream URL from correct position
+		go m.runPlaybackWithRetry(session, seekPosition)
+		return nil
+	}
+
+	// Short pause — normal SIGCONT resume, stream URL still valid
 	if session.Pipeline != nil {
 		session.Pipeline.Resume()
 	}
